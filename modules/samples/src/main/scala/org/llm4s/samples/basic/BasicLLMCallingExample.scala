@@ -88,7 +88,9 @@ object BasicLLMCallingExample {
     )
 
     // Optional max token override via environment variable
-    val rawMaxTokens = sys.env.get("LLM_MAX_TOKENS")
+    val rawMaxTokens =
+  sys.props.get("llm4s.llm.maxTokens")
+    .orElse(sys.env.get("LLM_MAX_TOKENS"))
 
     val maxTokensFromEnv: Option[Int] =
       rawMaxTokens
@@ -151,7 +153,6 @@ object BasicLLMCallingExample {
         logger.error("{}", err.formatted)
         logger.info("Tip: Make sure your environment variables or application.conf values are set correctly.")
         logger.info("For more help, see: https://github.com/llm4s/llm4s#getting-started")
-        sys.exit(1)
       },
       identity
     )
