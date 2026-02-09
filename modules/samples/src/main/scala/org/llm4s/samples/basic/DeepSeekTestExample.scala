@@ -21,13 +21,15 @@ object DeepSeekTestExample {
 
   def main(args: Array[String]): Unit = {
     // Get API key from environment
-    val apiKey = sys.env.getOrElse(
-      "DEEPSEEK_API_KEY", {
-        logger.error("DEEPSEEK_API_KEY environment variable not set")
-        sys.exit(1)
-        ""
-      }
-    )
+    private def env(key: String): Option[String] =
+      sys.props.get(key).orElse(sys.env.get(key))
+
+    val apiKey = env("DEEPSEEK_API_KEY") match {
+     case Some(key) => key
+     case None =>
+      logger.error("DEEPSEEK_API_KEY environment variable not set")
+      return
+    }
 
     val config = DeepSeekConfig.fromValues(
       modelName = "deepseek-chat",

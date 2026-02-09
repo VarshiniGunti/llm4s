@@ -33,10 +33,10 @@ object S3LoaderExample extends App {
   logger.info("=" * 60)
 
   // Configuration - adjust these for your environment
-  val bucket        = sys.env.getOrElse("S3_BUCKET", "my-documents")
-  val prefix        = sys.env.getOrElse("S3_PREFIX", "docs/")
-  val region        = sys.env.getOrElse("AWS_REGION", "us-east-1")
-  val useLocalStack = sys.env.getOrElse("USE_LOCALSTACK", "false").toBoolean
+  val bucket        = env("S3_BUCKET").getOrElse("my-documents")
+  val prefix        = env("S3_PREFIX").getOrElse("docs/")
+  val region        = env("AWS_REGION").getOrElse("us-east-1")
+  val useLocalStack = env("USE_LOCALSTACK").getOrElse("false").toBoolean
 
   logger.info("Configuration:")
   logger.info("  Bucket: {}", bucket)
@@ -56,13 +56,12 @@ object S3LoaderExample extends App {
       logger.error("Error: {}", err.message)
       logger.error("Make sure you have set:")
       logger.error("  - OPENAI_API_KEY")
-      sys.exit(1)
+      return
 
     case Right(rag) =>
-      try
-        runExample(rag, bucket, prefix, region, useLocalStack)
-      finally
-        rag.close()
+     runExample(rag, bucket, prefix, region, useLocalStack)
+     rag.close()
+
   }
 
   def runExample(
@@ -157,8 +156,8 @@ object S3LoaderAdvancedExample extends App {
   val withCredsLoader = S3Loader
     .withCredentials(
       bucket = "private-bucket",
-      accessKeyId = sys.env.getOrElse("AWS_ACCESS_KEY_ID", "test"),
-      secretAccessKey = sys.env.getOrElse("AWS_SECRET_ACCESS_KEY", "test"),
+      accessKeyId = env("AWS_ACCESS_KEY_ID").getOrElse("test"),
+      secretAccessKey = env("AWS_SECRET_ACCESS_KEY").getOrElse("test"),
       region = "eu-west-1"
     )
     .tap(l => logger.info("Credentials loader: {}", l.description))

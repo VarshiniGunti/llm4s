@@ -26,9 +26,14 @@ import scala.concurrent.duration._
 object SemanticCachingSample extends App {
 
   // Check for API key
-  val apiKey = sys.env.get("OPENAI_API_KEY").getOrElse {
-    println("ERROR: OPENAI_API_KEY environment variable not set")
-    sys.exit(1)
+  private def env(key: String): Option[String] =
+    sys.props.get(key).orElse(sys.env.get(key))
+
+  val apiKey = env("OPENAI_API_KEY") match {
+    case Some(key) => key
+    case None =>
+      println("ERROR: OPENAI_API_KEY environment variable not set")
+      return
   }
 
   println("=== Semantic Caching Demo ===\n")
@@ -61,7 +66,10 @@ object SemanticCachingSample extends App {
       ttl = 5.minutes,
       maxSize = 100
     )
-    .fold(err => sys.error(err.message), identity)
+    .fold(err => {
+     println(s"ERROR: ${err.message}")
+     return
+    }, identity)
 
   // Wrap base client with caching
   val cachingClient = new CachingLLMClient(
@@ -80,7 +88,10 @@ object SemanticCachingSample extends App {
   // Demo 1: Cache miss then hit
   println("--- Demo 1: Identical queries (should hit cache) ---")
   val query1 = "What is the capital of France?"
-  val conv1  = Conversation.userOnly(query1).getOrElse(sys.error("Failed to create conversation"))
+  val conv1 = Conversation.userOnly(query1).getOrElse {
+    println("ERROR: Failed to create conversation")
+    return
+  }
 
   println(s"Query 1: $query1")
   cachingClient.complete(conv1) match {
@@ -97,7 +108,10 @@ object SemanticCachingSample extends App {
   // Demo 2: Similar query (should hit cache if similarity > threshold)
   println("--- Demo 2: Similar query ---")
   val query2 = "Tell me the capital city of France"
-  val conv2  = Conversation.userOnly(query2).getOrElse(sys.error("Failed to create conversation"))
+  val conv2 = Conversation.userOnly(query2).getOrElse {
+    println("ERROR: Failed to create conversation")
+    return
+  }
 
   println(s"Query 3 (similar): $query2")
   cachingClient.complete(conv2) match {
@@ -108,8 +122,11 @@ object SemanticCachingSample extends App {
   // Demo 3: Different query (should miss cache)
   println("--- Demo 3: Different query (should miss cache) ---")
   val query3 = "What is the capital of Germany?"
-  val conv3  = Conversation.userOnly(query3).getOrElse(sys.error("Failed to create conversation"))
-
+  val conv3 = Conversation.userOnly(query3).getOrElse {
+    println("ERROR: Failed to create conversation")
+    return
+  }
+  
   println(s"Query 4 (different): $query3")
   cachingClient.complete(conv3) match {
     case Right(completion) => println(s"Response: ${completion.content}\n")

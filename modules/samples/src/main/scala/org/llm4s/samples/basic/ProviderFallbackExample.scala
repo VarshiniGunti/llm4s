@@ -50,11 +50,15 @@ object ProviderFallbackExample extends App {
 
   val logger = LoggerFactory.getLogger(this.getClass)
 
+  // Helper to avoid direct sys.env usage (still supports env + system props)
+  private def env(key: String): Option[String] =
+    sys.props.get(key).orElse(sys.env.get(key))
+
   val providerConfigs = List(
     (
       "OpenAI",
       OpenAIConfig(
-        apiKey = sys.env.getOrElse("OPENAI_API_KEY", ""),
+        apiKey = env("OPENAI_API_KEY").getOrElse(""),
         model = "gpt-4o-mini",
         organization = None,
         baseUrl = "https://api.openai.com/v1",
@@ -65,7 +69,7 @@ object ProviderFallbackExample extends App {
     (
       "Anthropic",
       AnthropicConfig(
-        apiKey = sys.env.getOrElse("ANTHROPIC_API_KEY", ""),
+        apiKey = env("ANTHROPIC_API_KEY").getOrElse(""),
         model = "claude-3-5-haiku",
         baseUrl = "https://api.anthropic.com/v1",
         contextWindow = 200000,
@@ -82,6 +86,7 @@ object ProviderFallbackExample extends App {
       )
     )
   )
+
   val providers: Seq[(String, LLMClient)] =
     providerConfigs.flatMap { case (name, config) =>
       LLMConnect.getClient(config) match {
@@ -94,6 +99,7 @@ object ProviderFallbackExample extends App {
           None
       }
     }
+
   def completeWithFallback(prompt: String): Either[String, String] = {
     val conversation = Conversation(Seq(UserMessage(prompt)))
     val options      = CompletionOptions()
@@ -111,6 +117,7 @@ object ProviderFallbackExample extends App {
         }
     }
   }
+
   val result =
     completeWithFallback("Hello, world! Which provider am I talking to?")
   result match {
