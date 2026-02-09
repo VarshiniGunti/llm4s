@@ -176,3 +176,74 @@ Although the schema supports vector embeddings, calling ` search(...)` currently
 
 Logical composition of filters (AND, OR, NOT) is not yet supported.
 
+---
+
+## Usage Examples
+
+This section shows how a developer would use `PostgresMemoryStore` in a real application after configuration is complete.
+
+### Initialize the Store
+
+```scala
+import org.llm4s.agent.memory.PostgresMemoryStore
+
+val config = PostgresMemoryStore.Config(
+  host = "localhost",
+  port = 5432,
+  database = "my_app_db",
+  user = "postgres",
+  password = "secure_password",
+  tableName = "agent_memories"
+)
+
+// Returns Result[PostgresMemoryStore]
+val storeResult = PostgresMemoryStore(config)
+
+### Store a Memory
+
+```scala
+import org.llm4s.agent.memory.Memory
+
+val memory = Memory(
+  id = "memory-1",
+  content = "Scala enables reliable AI systems",
+  memoryType = "knowledge",
+  metadata = Map("topic" -> "scala"),
+  embedding = Some(embeddingVector) // must match configured dimension
+)
+
+store.add(memory)
+
+### Recall Memories with a Filter
+
+```scala
+import org.llm4s.agent.memory.MemoryFilter
+
+val results = store.recall(
+  filter = MemoryFilter.ByMetadata("topic", "scala"),
+  limit = 5
+)
+
+### Update a Memory
+
+```scala
+val updated = memory.copy(content = "Updated memory content")
+store.update(updated)
+
+### Delete a Memory
+
+```scala
+store.delete("memory-1")
+
+
+---
+
+## Troubleshooting
+
+| Problem | Cause | Fix |
+|--------|------|-----|
+| `extension "vector" does not exist` | pgvector not installed or enabled | Run `CREATE EXTENSION vector;` in your database |
+| Connection timeout or pool exhaustion | Incorrect DB URL or pool size too small | Check host/port/credentials and `maxPoolSize` config |
+| Embedding dimension mismatch | Stored embeddings use a different model size | Use the same embedding model for both storage and queries |
+| Table name validation error | Table name does not match allowed pattern | Use only letters, numbers, and underscores, starting with a letter or underscore |
+| Metadata key validation errors | Invalid metadata keys in filters | Ensure keys match `^[a-zA-Z_][a-zA-Z0-9_]*$` |
