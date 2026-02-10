@@ -182,10 +182,11 @@ Logical composition of filters (AND, OR, NOT) is not yet supported.
 
 This section shows how a developer would use `PostgresMemoryStore` in a real application after configuration is complete.
 
-### Initialize the Store
+### End-to-End Example (Result-based workflow)
 
 ```scala
-import org.llm4s.agent.memory.PostgresMemoryStore
+import java.time.Instant
+import org.llm4s.agent.memory.{PostgresMemoryStore, Memory, MemoryFilter, MemoryId}
 
 val config = PostgresMemoryStore.Config(
   host = "localhost",
@@ -196,45 +197,23 @@ val config = PostgresMemoryStore.Config(
   tableName = "agent_memories"
 )
 
-// Returns Result[PostgresMemoryStore]
-val storeResult = PostgresMemoryStore(config)
-
-### Store a Memory
-
-```scala
-import org.llm4s.agent.memory.Memory
-
 val memory = Memory(
-  id = "memory-1",
+  id = MemoryId("memory-1"),
   content = "Scala enables reliable AI systems",
   memoryType = "knowledge",
   metadata = Map("topic" -> "scala"),
+  createdAt = Instant.now(),
+  importance = 0.8,
   embedding = Some(embeddingVector) // must match configured dimension
 )
 
-store.add(memory)
-
-### Recall Memories with a Filter
-
-```scala
-import org.llm4s.agent.memory.MemoryFilter
-
-val results = store.recall(
-  filter = MemoryFilter.ByMetadata("topic", "scala"),
-  limit = 5
-)
-
-### Update a Memory
-
-```scala
-val updated = memory.copy(content = "Updated memory content")
-store.update(updated)
-
-### Delete a Memory
-
-```scala
-store.delete("memory-1")
-
+val result = for {
+  store   <- PostgresMemoryStore(config)
+  store2  <- store.store(memory)
+  results <- store2.recall(MemoryFilter.ByMetadata("topic", "scala"), limit = 5)
+  store3  <- store2.update(MemoryId("memory-1"), m => m.copy(content = "Updated memory content"))
+  store4  <- store3.delete(MemoryId("memory-1"))
+} yield results
 
 ---
 
