@@ -24,10 +24,9 @@ object TypeUsage {
     val modelName = ModelName.GPT_4
     val provider  = ProviderName.OPENAI
     val apiKey = ApiKey("sk-test123").getOrElse {
-     logger.error("Invalid API key")
-     break(())
+      logger.error("Invalid API key")
+      break(())
     }
-
 
     logger.info("Using model {} from provider {}", modelName, provider)
     logger.info("API key: {}", apiKey) // Safely prints masked version

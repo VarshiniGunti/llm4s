@@ -54,7 +54,7 @@ object ProviderFallbackExample extends App {
   private def env(key: String): Option[String] =
     sys.props.get(key).orElse(sys.env.get(key))
 
-  val providerConfigs: List[(String , ProviderConfig)] =
+  val providerConfigs: List[(String, ProviderConfig)] =
     List(
       env("OPENAI_API_KEY").map { key =>
         "OpenAI" ->

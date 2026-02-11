@@ -131,7 +131,7 @@ object S3LoaderExample {
     logger.info("=" * 60)
     logger.info("Example complete")
     logger.info("=" * 60)
- }
+  }
 }
 
 /**

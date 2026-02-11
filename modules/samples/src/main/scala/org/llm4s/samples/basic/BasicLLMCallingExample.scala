@@ -91,8 +91,8 @@ object BasicLLMCallingExample {
 
     // Optional max token override via environment variable
     val rawMaxTokens =
-     env("llm4s.llm.maxTokens")
-      .orElse(env("LLM_MAX_TOKENS"))
+      env("llm4s.llm.maxTokens")
+        .orElse(env("LLM_MAX_TOKENS"))
 
     val maxTokensFromEnv: Option[Int] =
       rawMaxTokens
