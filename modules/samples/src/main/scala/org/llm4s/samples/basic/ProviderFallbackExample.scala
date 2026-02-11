@@ -54,38 +54,39 @@ object ProviderFallbackExample extends App {
   private def env(key: String): Option[String] =
     sys.props.get(key).orElse(sys.env.get(key))
 
-  val providerConfigs = List(
-    (
-      "OpenAI",
-      OpenAIConfig(
-        apiKey = env("OPENAI_API_KEY").getOrElse(""),
-        model = "gpt-4o-mini",
-        organization = None,
-        baseUrl = "https://api.openai.com/v1",
-        contextWindow = 128000,
-        reserveCompletion = 4096
+  val providerConfigs: List[(String , ProviderConfig)] =
+    List(
+      env("OPENAI_API_KEY").map { key =>
+        "OpenAI" ->
+          OpenAIConfig(
+            apiKey = key,
+            model = "gpt-4o-mini",
+            organization = None,
+            baseUrl = "https://api.openai.com/v1",
+            contextWindow = 128000,
+            reserveCompletion = 4096
+          )
+      },
+      env("ANTHROPIC_API_KEY").map { key =>
+        "Anthropic" ->
+          AnthropicConfig(
+            apiKey = key,
+            model = "claude-3-5-haiku",
+            baseUrl = "https://api.anthropic.com/v1",
+            contextWindow = 200000,
+            reserveCompletion = 4096
+          )
+      },
+      Some(
+        "Ollama" ->
+          OllamaConfig(
+            baseUrl = "http://localhost:11434",
+            model = "llama3",
+            contextWindow = 8192,
+            reserveCompletion = 4096
+          )
       )
-    ),
-    (
-      "Anthropic",
-      AnthropicConfig(
-        apiKey = env("ANTHROPIC_API_KEY").getOrElse(""),
-        model = "claude-3-5-haiku",
-        baseUrl = "https://api.anthropic.com/v1",
-        contextWindow = 200000,
-        reserveCompletion = 4096
-      )
-    ),
-    (
-      "Ollama",
-      OllamaConfig(
-        baseUrl = "http://localhost:11434",
-        model = "llama3",
-        contextWindow = 8192,
-        reserveCompletion = 4096
-      )
-    )
-  )
+    ).flatten
 
   val providers: Seq[(String, LLMClient)] =
     providerConfigs.flatMap { case (name, config) =>

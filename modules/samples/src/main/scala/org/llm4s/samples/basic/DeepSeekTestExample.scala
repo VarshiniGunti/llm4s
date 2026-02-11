@@ -19,16 +19,16 @@ import org.slf4j.LoggerFactory
 object DeepSeekTestExample {
   private val logger = LoggerFactory.getLogger(getClass)
 
+  private def env(key: String): Option[String] =
+    sys.props.get(key).orElse(sys.env.get(key))
+
   def main(args: Array[String]): Unit = {
-    // Get API key from environment
-    private def env(key: String): Option[String] =
-      sys.props.get(key).orElse(sys.env.get(key))
 
     val apiKey = env("DEEPSEEK_API_KEY") match {
-     case Some(key) => key
-     case None =>
-      logger.error("DEEPSEEK_API_KEY environment variable not set")
-      return
+      case Some(key) => key
+      case None =>
+        logger.error("DEEPSEEK_API_KEY environment variable not set")
+        return
     }
 
     val config = DeepSeekConfig.fromValues(

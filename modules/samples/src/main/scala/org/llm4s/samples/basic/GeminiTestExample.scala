@@ -16,18 +16,17 @@ import org.llm4s.toolapi.tools.WeatherTool
  * }}}
  */
 object GeminiTestExample {
-  def main(args: Array[String]): Unit = {
-    // Get API key from environment
-    private def env(key: String): Option[String] =
-      sys.props.get(key).orElse(sys.env.get(key))
 
+  private def env(key: String): Option[String] =
+    sys.props.get(key).orElse(sys.env.get(key))
+
+  def main(args: Array[String]): Unit = {
     val apiKey = env("GOOGLE_API_KEY") match {
       case Some(key) => key
       case None =>
         println("Error: GOOGLE_API_KEY environment variable not set")
         return
-   }
-
+    }
 
     val config = GeminiConfig.fromValues(
       modelName = "gemini-2.5-flash",
