@@ -57,8 +57,6 @@ import org.slf4j.LoggerFactory
  */
 object BasicLLMCallingExample {
   private val logger = LoggerFactory.getLogger(getClass)
-  private def env(key: String): Option[String] =
-    sys.props.get(key).orElse(sys.env.get(key))
 
   def main(args: Array[String]): Unit = {
     // Create a multi-turn conversation demonstrating different message types
@@ -89,29 +87,6 @@ object BasicLLMCallingExample {
       )
     )
 
-    // Optional max token override via environment variable
-    val rawMaxTokens =
-      env("llm4s.llm.maxTokens")
-        .orElse(env("LLM_MAX_TOKENS"))
-
-    val maxTokensFromEnv: Option[Int] =
-      rawMaxTokens
-        .map(_.trim)
-        .flatMap(_.toIntOption)
-        .filter(_ > 0)
-        .orElse {
-          rawMaxTokens match {
-            case Some(v) if v.nonEmpty =>
-              logger.warn(
-                "Ignoring invalid LLM_MAX_TOKENS='{}'. Must be a positive integer.",
-                v
-              )
-              None
-            case _ =>
-              None
-          }
-        }
-
     // Execute the example with explicit configuration and error handling
     val result = for {
       // Load provider configuration (model, base URL, API key, etc.)
@@ -120,13 +95,7 @@ object BasicLLMCallingExample {
       client <- LLMConnect.getClient(providerCfg)
 
       // Make the completion request
-      completion <- client.complete(
-        conversation,
-        CompletionOptions(
-          maxTokens = maxTokensFromEnv
-        )
-      )
-
+      completion <- client.complete(conversation)
       _ = {
         // Display the response
         logger.info("Success! Response from {}", completion.model)

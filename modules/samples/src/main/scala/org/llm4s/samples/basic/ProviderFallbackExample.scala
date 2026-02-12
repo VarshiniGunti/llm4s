@@ -2,7 +2,7 @@ package org.llm4s.samples.basic
 
 import org.llm4s.llmconnect._
 import org.llm4s.llmconnect.model._
-import org.llm4s.llmconnect.config._
+import org.llm4s.config.Llm4sConfig
 import org.slf4j.LoggerFactory
 
 /**
@@ -46,85 +46,28 @@ import org.slf4j.LoggerFactory
  * - '''Ollama''': `LLM_MODEL=ollama/<model>`, no API key required (local)
  */
 
-object ProviderFallbackExample extends App {
+object ProviderFallbackExample {
 
-  val logger = LoggerFactory.getLogger(this.getClass)
+  private val logger = LoggerFactory.getLogger(getClass)
 
-  // Helper to avoid direct sys.env usage (still supports env + system props)
-  private def env(key: String): Option[String] =
-    sys.props.get(key).orElse(sys.env.get(key))
+  def main(args: Array[String]): Unit = {
 
-  val providerConfigs: List[(String, ProviderConfig)] =
-    List(
-      env("OPENAI_API_KEY").map { key =>
-        "OpenAI" ->
-          OpenAIConfig(
-            apiKey = key,
-            model = "gpt-4o-mini",
-            organization = None,
-            baseUrl = "https://api.openai.com/v1",
-            contextWindow = 128000,
-            reserveCompletion = 4096
-          )
-      },
-      env("ANTHROPIC_API_KEY").map { key =>
-        "Anthropic" ->
-          AnthropicConfig(
-            apiKey = key,
-            model = "claude-3-5-haiku",
-            baseUrl = "https://api.anthropic.com/v1",
-            contextWindow = 200000,
-            reserveCompletion = 4096
-          )
-      },
-      Some(
-        "Ollama" ->
-          OllamaConfig(
-            baseUrl = "http://localhost:11434",
-            model = "llama3",
-            contextWindow = 8192,
-            reserveCompletion = 4096
-          )
+    val result = for {
+      providerCfg <- Llm4sConfig.provider()
+      client      <- LLMConnect.getClient(providerCfg)
+
+      completion <- client.complete(
+        Conversation(
+          Seq(UserMessage("Hello, world! Which provider am I talking to?"))
+        )
       )
-    ).flatten
 
-  val providers: Seq[(String, LLMClient)] =
-    providerConfigs.flatMap { case (name, config) =>
-      LLMConnect.getClient(config) match {
-        case Right(client) =>
-          Some(name -> client)
-        case Left(error) =>
-          logger.info(
-            s"Failed to initialize provider: $name - ${error.formatted}"
-          )
-          None
-      }
-    }
+      _ = logger.info(s"[SUCCESS] ${completion.message.content}")
+    } yield ()
 
-  def completeWithFallback(prompt: String): Either[String, String] = {
-    val conversation = Conversation(Seq(UserMessage(prompt)))
-    val options      = CompletionOptions()
-    providers.foldLeft[Either[String, String]](Left("All providers failed")) {
-      case (success @ Right(_), _) =>
-        success
-      case (Left(_), (name, client)) =>
-        client.complete(conversation, options) match {
-          case Right(completion) =>
-            Right(completion.message.content)
-
-          case Left(error) =>
-            logger.info(s"[FALLBACK] $name failed: ${error.message}")
-            Left(s"$name failed")
-        }
-    }
-  }
-
-  val result =
-    completeWithFallback("Hello, world! Which provider am I talking to?")
-  result match {
-    case Right(text) =>
-      logger.info(s"[SUCCESS] Response:\n$text")
-    case Left(error) =>
-      logger.info(s"[FAILED] $error")
+    result.fold(
+      err => logger.error("{}", err.formatted),
+      identity
+    )
   }
 }
