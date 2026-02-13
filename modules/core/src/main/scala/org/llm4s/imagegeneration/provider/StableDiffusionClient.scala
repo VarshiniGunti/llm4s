@@ -114,7 +114,8 @@ class StableDiffusionClient(config: StableDiffusionConfig) extends ImageGenerati
         format = ImageFormat.PNG,
         seed = None
       )
-    } yield images.head
+      image <- images.headOption.toRight(ValidationError("No images returned from Stable Diffusion img2img endpoint"))
+    } yield image
 
   override def health(): Either[ImageGenerationError, ServiceStatus] = Try {
     val response = requests.get(

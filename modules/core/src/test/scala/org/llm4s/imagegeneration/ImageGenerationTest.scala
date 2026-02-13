@@ -113,14 +113,20 @@ class ImageGenerationTest extends AnyFunSuite with Matchers {
     options.guidanceScale shouldBe 7.5
     options.inferenceSteps shouldBe 20
     options.negativePrompt shouldBe None
+    options.quality shouldBe None
+    options.style shouldBe None
+    options.responseFormat shouldBe None
+    options.outputFormat shouldBe None
+    options.background shouldBe None
+    options.outputCompression shouldBe None
+    options.user shouldBe None
   }
 
   test("ImageEditOptions has sensible defaults") {
     val options = ImageEditOptions()
     options.size shouldBe None
     options.n shouldBe 1
-    options.responseFormat shouldBe None
-    options.quality shouldBe None
+    options.providerOptions shouldBe None
   }
 
   test("GeneratedImage decodes base64 data correctly") {
@@ -195,6 +201,12 @@ class ImageGenerationTest extends AnyFunSuite with Matchers {
     client shouldBe a[org.llm4s.imagegeneration.provider.HuggingFaceClient]
   }
 
+  test("openAIClient creates client with default GPT image model") {
+    val client = ImageGeneration.openAIClient(apiKey = "test-key")
+
+    client shouldBe a[org.llm4s.imagegeneration.provider.OpenAIImageClient]
+  }
+
   test("Config objects have correct default values") {
     val sdConfig = StableDiffusionConfig()
     sdConfig.baseUrl shouldBe "http://localhost:7860"
@@ -206,6 +218,11 @@ class ImageGenerationTest extends AnyFunSuite with Matchers {
     hfConfig.model shouldBe "stabilityai/stable-diffusion-xl-base-1.0"
     hfConfig.timeout shouldBe 120000
     hfConfig.provider shouldBe ImageGenerationProvider.HuggingFace
+
+    val openAIConfig = OpenAIConfig(apiKey = "test-key")
+    openAIConfig.model shouldBe "gpt-image-1"
+    openAIConfig.timeout shouldBe 30000
+    openAIConfig.provider shouldBe ImageGenerationProvider.DALLE
   }
 
   test("Config objects can be customized") {

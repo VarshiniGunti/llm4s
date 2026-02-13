@@ -7,6 +7,7 @@ import org.scalatest.matchers.should.Matchers
 import java.awt.image.BufferedImage
 import java.nio.file.Files
 import javax.imageio.ImageIO
+import scala.util.Using
 
 class StableDiffusionClientEditTest extends AnyFlatSpec with Matchers {
 
@@ -24,10 +25,7 @@ class StableDiffusionClientEditTest extends AnyFlatSpec with Matchers {
   it should "fail when mask dimensions do not match source image dimensions" in {
     val client = new StableDiffusionClient(StableDiffusionConfig(baseUrl = "http://localhost:7860"))
 
-    val source = Files.createTempFile("sd-source", ".png")
-    val mask   = Files.createTempFile("sd-mask", ".png")
-
-    try {
+    withTempFiles("sd-source", "sd-mask") { (source, mask) =>
       writePng(source, width = 128, height = 128)
       writePng(mask, width = 64, height = 64)
 
@@ -39,14 +37,25 @@ class StableDiffusionClientEditTest extends AnyFlatSpec with Matchers {
       )
 
       result should matchPattern { case Left(_: ValidationError) => }
-    } finally {
-      Files.deleteIfExists(source)
-      Files.deleteIfExists(mask)
     }
   }
 
   private def writePng(path: java.nio.file.Path, width: Int, height: Int): Unit = {
     val image = new BufferedImage(width, height, BufferedImage.TYPE_INT_ARGB)
     ImageIO.write(image, "png", path.toFile)
+  }
+
+  private def withTempFiles[A](sourcePrefix: String, maskPrefix: String)(f: (java.nio.file.Path, java.nio.file.Path) => A): A =
+    Using.Manager { use =>
+      val source = use(tempFile(sourcePrefix))
+      val mask   = use(tempFile(maskPrefix))
+      f(source.path, mask.path)
+    }.get
+
+  private def tempFile(prefix: String): TempFile =
+    TempFile(Files.createTempFile(prefix, ".png"))
+
+  private case class TempFile(path: java.nio.file.Path) extends AutoCloseable {
+    override def close(): Unit = Files.deleteIfExists(path)
   }
 }

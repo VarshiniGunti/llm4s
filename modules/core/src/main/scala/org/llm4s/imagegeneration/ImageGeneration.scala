@@ -76,15 +76,37 @@ case class ImageGenerationOptions(
   guidanceScale: Double = 7.5,
   inferenceSteps: Int = 20,
   negativePrompt: Option[String] = None,
-  samplerName: Option[String] = None // Optional sampler name
+  samplerName: Option[String] = None,    // Optional sampler name
+  quality: Option[String] = None,        // OpenAI images: e.g. "low" | "medium" | "high" | "standard" | "hd"
+  style: Option[String] = None,          // OpenAI images: e.g. "vivid" | "natural"
+  responseFormat: Option[String] = None, // OpenAI images: "url" | "b64_json"
+  outputFormat: Option[String] = None,   // OpenAI images: "png" | "jpeg" | "webp"
+  background: Option[String] = None,     // OpenAI images: e.g. "auto" | "transparent" | "opaque"
+  outputCompression: Option[Int] = None, // OpenAI images: 0-100
+  user: Option[String] = None            // OpenAI images: end-user identifier
 )
 
 /** Options for image editing/inpainting */
+sealed trait ProviderImageEditOptions
+object ProviderImageEditOptions {
+  case class OpenAI(
+    responseFormat: Option[String] = None,
+    quality: Option[String] = None,
+    style: Option[String] = None,
+    background: Option[String] = None,
+    outputFormat: Option[String] = None,
+    outputCompression: Option[Int] = None,
+    user: Option[String] = None
+  ) extends ProviderImageEditOptions
+  case class StableDiffusion(
+    denoisingStrength: Option[Double] = None
+  ) extends ProviderImageEditOptions
+}
+
 case class ImageEditOptions(
   size: Option[ImageSize] = None,
   n: Int = 1,
-  responseFormat: Option[String] = None,
-  quality: Option[String] = None
+  providerOptions: Option[ProviderImageEditOptions] = None
 )
 
 /** Service health status */
@@ -119,21 +141,28 @@ case class GeneratedImage(
   /** Seed used for generation (if available) */
   seed: Option[Long] = None,
   /** Optional file path if saved to disk */
-  filePath: Option[Path] = None
+  filePath: Option[Path] = None,
+  /** URL for remote image retrieval when response format is url */
+  url: Option[String] = None
 ) {
 
   /** Get the image data as bytes */
   def asBytes: Array[Byte] = {
     import java.util.Base64
-    Base64.getDecoder.decode(data)
+    if (data.isEmpty) Array.emptyByteArray
+    else Base64.getDecoder.decode(data)
   }
 
   /** Save image to file and return updated GeneratedImage with file path */
   def saveToFile(path: Path): Either[ImageGenerationError, GeneratedImage] = {
     import java.nio.file.Files
-    Try(Files.write(path, asBytes)).toEither.left
-      .map(UnknownError.apply)
-      .map(_ => copy(filePath = Some(path)))
+    if (data.isEmpty) {
+      Left(ValidationError("No binary image data available to save; request b64_json or use the URL"))
+    } else {
+      Try(Files.write(path, asBytes)).toEither.left
+        .map(UnknownError.apply)
+        .map(_ => copy(filePath = Some(path)))
+    }
   }
 }
 
@@ -185,17 +214,17 @@ case class HuggingFaceConfig(
 }
 
 /**
- * Configuration for OpenAI DALL-E API.
+ * Configuration for OpenAI Images API.
  *
  * @param apiKey Your OpenAI API key. This is required for authentication.
- * @param model The DALL-E model version to use (dall-e-2 or dall-e-3).
+ * @param model The image model to use (defaults to gpt-image-1).
  * @param timeout Request timeout in milliseconds.
  */
 case class OpenAIConfig(
   /** OpenAI API key */
   apiKey: String,
-  /** Model to use (dall-e-2 or dall-e-3) */
-  model: String = "dall-e-2",
+  /** Model to use (for example gpt-image-1, dall-e-2, or dall-e-3) */
+  model: String = "gpt-image-1",
   /** Request timeout in milliseconds */
   override val timeout: Int = 30000 // 30 seconds for image generation
 ) extends ImageGenerationConfig {
@@ -302,18 +331,18 @@ object ImageGeneration {
   }
 
   /**
-   * Get an OpenAI DALL-E client with the required API key.
+   * Get an OpenAI Images client with the required API key.
    *
    * This is a convenience method for creating a client that connects to the
-   * OpenAI API for DALL-E image generation.
+   * OpenAI Images API for image generation.
    *
    * @param apiKey Your OpenAI API key (required).
-   * @param model The DALL-E model version to use. Defaults to dall-e-2.
-   * @return An `ImageGenerationClient` instance configured for OpenAI DALL-E.
+   * @param model The image model to use. Defaults to gpt-image-1.
+   * @return An `ImageGenerationClient` instance configured for OpenAI Images.
    */
   def openAIClient(
     apiKey: String,
-    model: String = "dall-e-2"
+    model: String = "gpt-image-1"
   ): ImageGenerationClient = {
     val config = OpenAIConfig(apiKey = apiKey, model = model)
     client(config)
@@ -329,12 +358,12 @@ object ImageGeneration {
     generateImage(prompt, config, options)
   }
 
-  /** Convenience method for quick OpenAI DALL-E image generation */
+  /** Convenience method for quick OpenAI image generation */
   def generateWithOpenAI(
     prompt: String,
     apiKey: String,
     options: ImageGenerationOptions = ImageGenerationOptions(),
-    model: String = "dall-e-2"
+    model: String = "gpt-image-1"
   ): Either[ImageGenerationError, GeneratedImage] = {
     val config = OpenAIConfig(apiKey = apiKey, model = model)
     generateImage(prompt, config, options)
