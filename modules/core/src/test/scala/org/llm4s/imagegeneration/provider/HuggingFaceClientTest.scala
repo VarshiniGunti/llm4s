@@ -1,6 +1,6 @@
 package org.llm4s.imagegeneration.provider
 
-import org.llm4s.imagegeneration.{ HuggingFaceConfig, ImageGenerationOptions }
+import org.llm4s.imagegeneration.{ HuggingFaceConfig, ImageGenerationOptions, ValidationError }
 import org.scalamock.scalatest.MockFactory
 import org.scalatest.EitherValues
 import org.scalatest.flatspec.AnyFlatSpec
@@ -182,6 +182,17 @@ class HuggingFaceClientTest extends AnyFlatSpec with Matchers with MockFactory w
       val parsedPayload = read[HuggingClientPayload](jsonStr)
       parsedPayload.inputs shouldBe prompt
     }
+  }
+
+  "editImage" should "return ValidationError because provider is unsupported" in {
+    val client = new HuggingFaceClient(HuggingFaceConfig("test-key", "test-model"), httpClient)
+    val result = client.editImage(
+      imagePath = "source.png",
+      prompt = "add a hat",
+      maskPath = None
+    )
+
+    result should matchPattern { case Left(_: ValidationError) => }
   }
 
 }

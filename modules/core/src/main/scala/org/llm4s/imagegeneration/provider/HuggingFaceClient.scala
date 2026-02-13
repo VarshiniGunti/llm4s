@@ -146,6 +146,18 @@ class HuggingFaceClient(config: HuggingFaceConfig, httpClient: BaseHttpClient) e
     result
   }
 
+  override def editImage(
+    imagePath: String,
+    prompt: String,
+    maskPath: Option[String] = None,
+    options: ImageEditOptions = ImageEditOptions()
+  ): Either[ImageGenerationError, GeneratedImage] =
+    Left(
+      ValidationError(
+        "Image editing/inpainting is not currently supported for HuggingFace provider in llm4s"
+      )
+    )
+
   /**
    * Check the health status of the HuggingFace Inference API.
    *

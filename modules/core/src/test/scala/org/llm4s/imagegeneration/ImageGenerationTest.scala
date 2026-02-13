@@ -58,6 +58,21 @@ class ImageGenerationTest extends AnyFunSuite with Matchers {
       }
     }
 
+    override def editImage(
+      imagePath: String,
+      prompt: String,
+      maskPath: Option[String] = None,
+      options: ImageEditOptions = ImageEditOptions()
+    ): Either[ImageGenerationError, GeneratedImage] = {
+      if (prompt.trim.isEmpty) {
+        return Left(ValidationError("Prompt cannot be empty"))
+      }
+      if (imagePath.trim.isEmpty) {
+        return Left(ValidationError("Image path cannot be empty"))
+      }
+      generateImage(prompt, ImageGenerationOptions(size = options.size.getOrElse(ImageSize.Square512)))
+    }
+
     override def health(): Either[ImageGenerationError, ServiceStatus] =
       Right(
         ServiceStatus(
@@ -98,6 +113,14 @@ class ImageGenerationTest extends AnyFunSuite with Matchers {
     options.guidanceScale shouldBe 7.5
     options.inferenceSteps shouldBe 20
     options.negativePrompt shouldBe None
+  }
+
+  test("ImageEditOptions has sensible defaults") {
+    val options = ImageEditOptions()
+    options.size shouldBe None
+    options.n shouldBe 1
+    options.responseFormat shouldBe None
+    options.quality shouldBe None
   }
 
   test("GeneratedImage decodes base64 data correctly") {
@@ -262,6 +285,23 @@ class ImageGenerationTest extends AnyFunSuite with Matchers {
       case Left(_: InvalidPromptError) => succeed
       case Left(other)                 => fail(s"Expected InvalidPromptError, got $other")
       case Right(img)                  => fail(s"Expected error, but got image: $img")
+    }
+  }
+
+  test("Mock client supports edit image flow") {
+    val result = mockClient.editImage(
+      imagePath = "sample.png",
+      prompt = "add fog in the background",
+      maskPath = None,
+      options = ImageEditOptions(size = Some(ImageSize.Square1024))
+    )
+
+    result match {
+      case Right(image) =>
+        image.prompt shouldBe "add fog in the background"
+        image.size shouldBe ImageSize.Square1024
+      case Left(error) =>
+        fail(s"Expected successful image edit, but got error: $error")
     }
   }
 

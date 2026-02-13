@@ -3,88 +3,87 @@ package org.llm4s.imagegeneration.provider
 import org.llm4s.imagegeneration._
 import org.slf4j.LoggerFactory
 import ujson._
-import java.time.Instant
+
+import java.io.File
+import java.net.URI
+import java.net.http.{ HttpClient => JHttpClient, HttpRequest, HttpResponse }
+import java.nio.charset.StandardCharsets
+import java.nio.file.{ Files, Paths }
+import java.time.{ Duration, Instant }
+import java.util.UUID
+import javax.imageio.ImageIO
 import scala.util.Try
 
 /**
- * OpenAI DALL-E API client for image generation.
- *
- * This client connects to OpenAI's DALL-E API for text-to-image generation.
- * It supports both DALL-E 2 and DALL-E 3 models with their respective capabilities
- * and limitations.
+ * OpenAI DALL-E API client for image generation and editing.
  *
  * @param config Configuration containing API key, model selection, and timeout settings
- *
- * @example
- * {{{
- * val config = OpenAIConfig(
- *   apiKey = "your-openai-api-key",
- *   model = "dall-e-2"  // or "dall-e-3"
- * )
- * val client = new OpenAIImageClient(config)
- *
- * val options = ImageGenerationOptions(
- *   size = ImageSize.Square1024,
- *   format = ImageFormat.PNG
- * )
- *
- * client.generateImage("a beautiful landscape", options) match {
- *   case Right(image) => println(s"Generated image: $${image.size}")
- *   case Left(error) => println(s"Error: $${error.message}")
- * }
- * }}}
  */
 class OpenAIImageClient(config: OpenAIConfig) extends ImageGenerationClient {
 
-  private val logger = LoggerFactory.getLogger(getClass)
-  private val apiUrl = "https://api.openai.com/v1/images/generations"
+  private val logger            = LoggerFactory.getLogger(getClass)
+  private val generationApiUrl  = "https://api.openai.com/v1/images/generations"
+  private val imageEditsApiUrl  = "https://api.openai.com/v1/images/edits"
+  private val defaultEditFormat = ImageFormat.PNG
 
-  /**
-   * Generate a single image from a text prompt using OpenAI DALL-E API.
-   *
-   * @param prompt The text description of the image to generate
-   * @param options Optional generation parameters like size, format, etc.
-   * @return Either an error or the generated image
-   */
   override def generateImage(
     prompt: String,
     options: ImageGenerationOptions = ImageGenerationOptions()
   ): Either[ImageGenerationError, GeneratedImage] =
     generateImages(prompt, 1, options).map(_.head)
 
-  /**
-   * Generate multiple images from a text prompt using OpenAI DALL-E API.
-   *
-   * Note: DALL-E 3 only supports generating 1 image at a time.
-   *
-   * @param prompt The text description of the images to generate
-   * @param count The number of images to generate (1-10 for DALL-E 2, 1 for DALL-E 3)
-   * @param options Optional generation parameters
-   * @return Either an error or a sequence of generated images
-   */
   override def generateImages(
     prompt: String,
     count: Int,
     options: ImageGenerationOptions = ImageGenerationOptions()
   ): Either[ImageGenerationError, Seq[GeneratedImage]] = {
     logger.info(s"Generating $count image(s) with prompt: ${prompt.take(100)}...")
-
-    // Validate input
-    val result = for {
+    for {
       validPrompt <- validatePrompt(prompt)
       validCount  <- validateCount(count)
-      response    <- makeApiRequest(validPrompt, validCount, options)
-      images      <- parseResponse(response, validPrompt, options)
+      response    <- makeGenerationApiRequest(validPrompt, validCount, options)
+      images      <- parseResponse(response.text(), validPrompt, options.size, options.format, options.seed)
     } yield images
-    result
   }
 
-  /**
-   * Check the health/status of the OpenAI API service.
-   *
-   * Note: OpenAI doesn't provide a dedicated health endpoint,
-   * so we use a minimal models list request as a health check.
-   */
+  override def editImage(
+    imagePath: String,
+    prompt: String,
+    maskPath: Option[String] = None,
+    options: ImageEditOptions = ImageEditOptions()
+  ): Either[ImageGenerationError, GeneratedImage] = {
+    logger.info(s"Editing image with prompt: ${prompt.take(100)}...")
+    for {
+      validPrompt <- validatePrompt(prompt)
+      _           <- validateCount(options.n)
+      _           <- validateResponseFormat(options.responseFormat)
+      sourceImage <- readImageFile(imagePath, "source image")
+      sourceSize  <- readImageSize(imagePath, "source image")
+      _           <- validateMaskDimensions(imagePath, maskPath)
+      maskImage <- maskPath match {
+        case Some(path) => readImageFile(path, "mask image").map(Some(_))
+        case None       => Right(None)
+      }
+      outputSize <- resolveEditOutputSize(options.size, sourceSize)
+      responseText <- makeEditApiRequest(
+        imagePath = imagePath,
+        imageBytes = sourceImage,
+        prompt = validPrompt,
+        maskPath = maskPath,
+        maskBytes = maskImage,
+        outputSize = outputSize,
+        options = options
+      )
+      images <- parseResponse(
+        responseText = responseText,
+        prompt = validPrompt,
+        size = outputSize,
+        format = defaultEditFormat,
+        seed = None
+      )
+    } yield images.head
+  }
+
   override def health(): Either[ImageGenerationError, ServiceStatus] = {
     val response = requests.get(
       "https://api.openai.com/v1/models",
@@ -94,44 +93,19 @@ class OpenAIImageClient(config: OpenAIConfig) extends ImageGenerationClient {
     )
 
     if (response.statusCode == 200) {
-      Right(
-        ServiceStatus(
-          status = HealthStatus.Healthy,
-          message = "OpenAI API is responding"
-        )
-      )
+      Right(ServiceStatus(status = HealthStatus.Healthy, message = "OpenAI API is responding"))
     } else if (response.statusCode == 429) {
-      Right(
-        ServiceStatus(
-          status = HealthStatus.Degraded,
-          message = "Rate limited but operational"
-        )
-      )
+      Right(ServiceStatus(status = HealthStatus.Degraded, message = "Rate limited but operational"))
     } else {
-      Right(
-        ServiceStatus(
-          status = HealthStatus.Unhealthy,
-          message = s"API returned status ${response.statusCode}"
-        )
-      )
+      Right(ServiceStatus(status = HealthStatus.Unhealthy, message = s"API returned status ${response.statusCode}"))
     }
   }
 
-  /**
-   * Validate the prompt to ensure it meets OpenAI's requirements.
-   */
   private def validatePrompt(prompt: String): Either[ImageGenerationError, String] =
-    if (prompt.trim.isEmpty) {
-      Left(ValidationError("Prompt cannot be empty"))
-    } else if (prompt.length > 4000) {
-      Left(ValidationError("Prompt cannot exceed 4000 characters"))
-    } else {
-      Right(prompt)
-    }
+    if (prompt.trim.isEmpty) Left(ValidationError("Prompt cannot be empty"))
+    else if (prompt.length > 4000) Left(ValidationError("Prompt cannot exceed 4000 characters"))
+    else Right(prompt)
 
-  /**
-   * Validate the count based on the model being used.
-   */
   private def validateCount(count: Int): Either[ImageGenerationError, Int] = {
     val maxCount = if (config.model == "dall-e-3") 1 else 10
     if (count < 1 || count > maxCount) {
@@ -141,22 +115,80 @@ class OpenAIImageClient(config: OpenAIConfig) extends ImageGenerationClient {
     }
   }
 
-  /**
-   * Convert ImageSize to DALL-E API format string.
-   */
+  private def validateResponseFormat(responseFormat: Option[String]): Either[ImageGenerationError, Unit] =
+    responseFormat match {
+      case None                  => Right(())
+      case Some("b64_json")      => Right(())
+      case Some(unsupportedType) => Left(ValidationError(s"Unsupported response format: $unsupportedType"))
+    }
+
+  private def validateMaskDimensions(imagePath: String, maskPath: Option[String]): Either[ImageGenerationError, Unit] =
+    maskPath match {
+      case None => Right(())
+      case Some(mask) =>
+        for {
+          sourceSize <- readImageSize(imagePath, "source image")
+          maskSize   <- readImageSize(mask, "mask image")
+          _ <- Either.cond(
+            sourceSize == maskSize,
+            (),
+            ValidationError(
+              s"Mask dimensions (${maskSize.width}x${maskSize.height}) must match source image dimensions (${sourceSize.width}x${sourceSize.height})"
+            )
+          )
+        } yield ()
+    }
+
+  private def readImageFile(path: String, label: String): Either[ImageGenerationError, Array[Byte]] = {
+    val nioPath = Paths.get(path)
+    if (!Files.exists(nioPath)) {
+      Left(ValidationError(s"$label does not exist at path: $path"))
+    } else {
+      Try(Files.readAllBytes(nioPath)).toEither.left.map(ex =>
+        ServiceError(s"Failed to read $label: ${ex.getMessage}", 500)
+      )
+    }
+  }
+
+  private def readImageSize(path: String, label: String): Either[ImageGenerationError, ImageSize] = {
+    val file = new File(path)
+    if (!file.exists()) {
+      Left(ValidationError(s"$label does not exist at path: $path"))
+    } else {
+      Try(ImageIO.read(file)).toEither.left
+        .map(ex => ServiceError(s"Failed to read $label dimensions: ${ex.getMessage}", 500))
+        .flatMap {
+          case null => Left(ValidationError(s"$label is not a valid image: $path"))
+          case img  => Right(toImageSize(img.getWidth, img.getHeight))
+        }
+    }
+  }
+
+  private def resolveEditOutputSize(
+    requestedSize: Option[ImageSize],
+    sourceSize: ImageSize
+  ): Either[ImageGenerationError, ImageSize] =
+    Right(requestedSize.getOrElse(sourceSize))
+
+  private def toImageSize(width: Int, height: Int): ImageSize =
+    (width, height) match {
+      case (512, 512)   => ImageSize.Square512
+      case (1024, 1024) => ImageSize.Square1024
+      case (768, 512)   => ImageSize.Landscape768x512
+      case (512, 768)   => ImageSize.Portrait512x768
+      case _            => ImageSize.Custom(width, height)
+    }
+
   private def sizeToApiFormat(size: ImageSize): String =
-    // Map our generic sizes to DALL-E supported sizes
     size match {
       case ImageSize.Square512        => if (config.model == "dall-e-3") "1024x1024" else "512x512"
       case ImageSize.Square1024       => "1024x1024"
       case ImageSize.Landscape768x512 => if (config.model == "dall-e-3") "1792x1024" else "512x512"
       case ImageSize.Portrait512x768  => if (config.model == "dall-e-3") "1024x1792" else "512x512"
+      case ImageSize.Custom(w, h)     => s"${w}x${h}"
     }
 
-  /**
-   * Make the actual API request to OpenAI.
-   */
-  private def makeApiRequest(
+  private def makeGenerationApiRequest(
     prompt: String,
     count: Int,
     options: ImageGenerationOptions
@@ -169,13 +201,12 @@ class OpenAIImageClient(config: OpenAIConfig) extends ImageGenerationClient {
       "response_format" -> "b64_json"
     )
 
-    // Add quality parameter for DALL-E 3
     if (config.model == "dall-e-3") {
-      requestBody("quality") = "standard" // or "hd" for higher quality
+      requestBody("quality") = "standard"
     }
 
     val response = requests.post(
-      apiUrl,
+      generationApiUrl,
       headers = Map(
         "Authorization" -> s"Bearer ${config.apiKey}",
         "Content-Type"  -> "application/json"
@@ -185,24 +216,117 @@ class OpenAIImageClient(config: OpenAIConfig) extends ImageGenerationClient {
       connectTimeout = 10000
     )
 
-    if (response.statusCode == 200) {
-      Right(response)
-    } else {
-      handleErrorResponse(response)
+    if (response.statusCode == 200) Right(response) else handleErrorResponse(response.statusCode, response.text())
+  }
+
+  private def makeEditApiRequest(
+    imagePath: String,
+    imageBytes: Array[Byte],
+    prompt: String,
+    maskPath: Option[String],
+    maskBytes: Option[Array[Byte]],
+    outputSize: ImageSize,
+    options: ImageEditOptions
+  ): Either[ImageGenerationError, String] = {
+    val boundary       = s"llm4s-${UUID.randomUUID().toString}"
+    val responseFormat = options.responseFormat.getOrElse("b64_json")
+    val size           = options.size.map(sizeToApiFormat).getOrElse(sizeToApiFormat(outputSize))
+
+    val fields = Map(
+      "model"           -> config.model,
+      "prompt"          -> prompt,
+      "n"               -> options.n.toString,
+      "size"            -> size,
+      "response_format" -> responseFormat
+    ) ++ options.quality.map(value => "quality" -> value)
+
+    val body = buildMultipartBody(
+      boundary = boundary,
+      fields = fields,
+      imagePath = imagePath,
+      imageBytes = imageBytes,
+      maskPath = maskPath,
+      maskBytes = maskBytes
+    )
+
+    val request = HttpRequest
+      .newBuilder(URI.create(imageEditsApiUrl))
+      .timeout(Duration.ofMillis(config.timeout.toLong))
+      .header("Authorization", s"Bearer ${config.apiKey}")
+      .header("Content-Type", s"multipart/form-data; boundary=$boundary")
+      .POST(HttpRequest.BodyPublishers.ofByteArray(body))
+      .build()
+
+    val httpClient = JHttpClient.newBuilder().connectTimeout(Duration.ofSeconds(10)).build()
+    val response = Try(httpClient.send(request, HttpResponse.BodyHandlers.ofString())).toEither.left
+      .map(ex => ServiceError(s"OpenAI image edit request failed: ${ex.getMessage}", 500))
+
+    response.flatMap { resp =>
+      if (resp.statusCode() == 200) Right(resp.body()) else handleErrorResponse(resp.statusCode(), resp.body())
     }
   }
 
-  /**
-   * Handle error responses from the API.
-   */
-  private def handleErrorResponse(response: requests.Response): Either[ImageGenerationError, requests.Response] = {
-    val errorMessage = Try {
-      val json = read(response.text())
-      json("error")("message").str
-    }
-      .getOrElse(response.text())
+  private def buildMultipartBody(
+    boundary: String,
+    fields: Map[String, String],
+    imagePath: String,
+    imageBytes: Array[Byte],
+    maskPath: Option[String],
+    maskBytes: Option[Array[Byte]]
+  ): Array[Byte] = {
+    val newline = "\r\n"
+    val out     = new java.io.ByteArrayOutputStream()
 
-    response.statusCode match {
+    fields.foreach { case (name, value) =>
+      out.write(s"--$boundary$newline".getBytes(StandardCharsets.UTF_8))
+      out.write(s"""Content-Disposition: form-data; name="$name"$newline$newline""".getBytes(StandardCharsets.UTF_8))
+      out.write(value.getBytes(StandardCharsets.UTF_8))
+      out.write(newline.getBytes(StandardCharsets.UTF_8))
+    }
+
+    writeFilePart(out, boundary, "image", imagePath, imageBytes, newline)
+
+    (maskPath, maskBytes) match {
+      case (Some(path), Some(bytes)) => writeFilePart(out, boundary, "mask", path, bytes, newline)
+      case _                         =>
+    }
+
+    out.write(s"--$boundary--$newline".getBytes(StandardCharsets.UTF_8))
+    out.toByteArray
+  }
+
+  private def writeFilePart(
+    out: java.io.ByteArrayOutputStream,
+    boundary: String,
+    fieldName: String,
+    filePath: String,
+    fileBytes: Array[Byte],
+    newline: String
+  ): Unit = {
+    val filename = Paths.get(filePath).getFileName.toString
+    val mimeType = Option(Files.probeContentType(Paths.get(filePath))).getOrElse("application/octet-stream")
+
+    out.write(s"--$boundary$newline".getBytes(StandardCharsets.UTF_8))
+    out.write(
+      s"""Content-Disposition: form-data; name="$fieldName"; filename="$filename"$newline""".getBytes(
+        StandardCharsets.UTF_8
+      )
+    )
+    out.write(s"Content-Type: $mimeType$newline$newline".getBytes(StandardCharsets.UTF_8))
+    out.write(fileBytes)
+    out.write(newline.getBytes(StandardCharsets.UTF_8))
+  }
+
+  private def handleErrorResponse(
+    statusCode: Int,
+    responseBody: String
+  ): Either[ImageGenerationError, Nothing] = {
+    val errorMessage = Try {
+      val json = read(responseBody)
+      json("error")("message").str
+    }.getOrElse(responseBody)
+
+    statusCode match {
       case 401  => Left(AuthenticationError("Invalid API key"))
       case 429  => Left(RateLimitError("Rate limit exceeded"))
       case 400  => Left(ValidationError(s"Invalid request: $errorMessage"))
@@ -210,27 +334,24 @@ class OpenAIImageClient(config: OpenAIConfig) extends ImageGenerationClient {
     }
   }
 
-  /**
-   * Parse the API response into GeneratedImage objects.
-   */
   private def parseResponse(
-    response: requests.Response,
+    responseText: String,
     prompt: String,
-    options: ImageGenerationOptions
+    size: ImageSize,
+    format: ImageFormat,
+    seed: Option[Long]
   ): Either[ImageGenerationError, Seq[GeneratedImage]] = {
-    val json       = read(response.text())
+    val json       = read(responseText)
     val imagesData = json("data").arr
 
     val images = imagesData.map { imageData =>
-      val base64Data = imageData("b64_json").str
-
       GeneratedImage(
-        data = base64Data,
-        format = options.format,
-        size = options.size,
+        data = imageData("b64_json").str,
+        format = format,
+        size = size,
         createdAt = Instant.now(),
         prompt = prompt,
-        seed = options.seed,
+        seed = seed,
         filePath = None
       )
     }.toSeq

@@ -30,6 +30,9 @@ object ImageGenerationExample {
 
     // Example 4: Error handling
     errorHandlingExample()
+
+    // Example 5: Image editing / inpainting
+    imageEditingExample()
   }
 
   def basicExample(): Unit = {
@@ -128,6 +131,31 @@ object ImageGenerationExample {
         logger.info(s"Service status: ${status.status} - ${status.message}")
       case Left(error) =>
         logger.info(s"Health check failed as expected: ${error.message}")
+    }
+  }
+
+  def imageEditingExample(): Unit = {
+    logger.info("\n--- Image Editing Example ---")
+
+    val sourceImage = Paths.get("input.png")
+    val maskImage   = Paths.get("mask.png")
+    val config      = StableDiffusionConfig()
+
+    ImageGeneration.editImage(
+      imagePath = sourceImage.toString,
+      prompt = "replace the sky with a dramatic sunset",
+      config = config,
+      maskPath = Some(maskImage.toString),
+      options = ImageEditOptions(
+        size = Some(ImageSize.Square512),
+        n = 1
+      )
+    ) match {
+      case Right(editedImage) =>
+        val output = Paths.get("edited_output.png")
+        editedImage.saveToFile(output).foreach(_ => logger.info(s"Edited image saved to: $output"))
+      case Left(error) =>
+        logger.info(s"Image editing failed (expected if input files are missing): ${error.message}")
     }
   }
 }

@@ -48,6 +48,7 @@ object ImageSize {
     val width  = 512
     val height = 768
   }
+  final case class Custom(width: Int, height: Int) extends ImageSize
 }
 
 /** Image format enumeration */
@@ -76,6 +77,14 @@ case class ImageGenerationOptions(
   inferenceSteps: Int = 20,
   negativePrompt: Option[String] = None,
   samplerName: Option[String] = None // Optional sampler name
+)
+
+/** Options for image editing/inpainting */
+case class ImageEditOptions(
+  size: Option[ImageSize] = None,
+  n: Int = 1,
+  responseFormat: Option[String] = None,
+  quality: Option[String] = None
 )
 
 /** Service health status */
@@ -210,6 +219,14 @@ trait ImageGenerationClient {
     options: ImageGenerationOptions = ImageGenerationOptions()
   ): Either[ImageGenerationError, Seq[GeneratedImage]]
 
+  /** Edit an existing image using a text prompt (optionally with a mask for inpainting). */
+  def editImage(
+    imagePath: String,
+    prompt: String,
+    maskPath: Option[String] = None,
+    options: ImageEditOptions = ImageEditOptions()
+  ): Either[ImageGenerationError, GeneratedImage]
+
   /** Check the health/status of the image generation service */
   def health(): Either[ImageGenerationError, ServiceStatus]
 }
@@ -246,6 +263,16 @@ object ImageGeneration {
     options: ImageGenerationOptions = ImageGenerationOptions()
   ): Either[ImageGenerationError, Seq[GeneratedImage]] =
     client(config).generateImages(prompt, count, options)
+
+  /** Convenience method for editing an image. */
+  def editImage(
+    imagePath: String,
+    prompt: String,
+    config: ImageGenerationConfig,
+    maskPath: Option[String] = None,
+    options: ImageEditOptions = ImageEditOptions()
+  ): Either[ImageGenerationError, GeneratedImage] =
+    client(config).editImage(imagePath, prompt, maskPath, options)
 
   /** Get a Stable Diffusion client with default local configuration */
   def stableDiffusionClient(
