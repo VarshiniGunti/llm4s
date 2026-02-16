@@ -706,7 +706,7 @@ class ZaiClientTestHelper(config: ZaiConfig) extends ZaiClient(config) {
   }
 
   def testParseStreamingArguments(raw: String): ujson.Value =
-    parseStreamingArguments(raw)
+    org.llm4s.llmconnect.streaming.StreamingToolArgumentParser.parse(raw)
 }
 
 // ============ Metrics Tests ============

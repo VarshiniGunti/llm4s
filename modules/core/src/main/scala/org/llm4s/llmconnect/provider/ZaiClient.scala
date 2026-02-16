@@ -4,7 +4,7 @@ import org.llm4s.util.Redaction
 import org.llm4s.llmconnect.LLMClient
 import org.llm4s.llmconnect.config.ZaiConfig
 import org.llm4s.llmconnect.model._
-import org.llm4s.llmconnect.streaming.{ SSEParser, StreamingAccumulator }
+import org.llm4s.llmconnect.streaming.{ SSEParser, StreamingAccumulator, StreamingToolArgumentParser }
 import org.llm4s.toolapi.ToolRegistry
 import org.llm4s.types.Result
 import org.llm4s.error.{ AuthenticationError, ConfigurationError, RateLimitError, ServiceError }
@@ -183,7 +183,7 @@ class ZaiClient(
           ToolCall(
             id = call.obj.get("id").flatMap(_.strOpt).getOrElse(""),
             name = function.obj.get("name").flatMap(_.strOpt).getOrElse(""),
-            arguments = parseStreamingArguments(rawArgs)
+            arguments = StreamingToolArgumentParser.parse(rawArgs)
           )
       }
 
@@ -221,16 +221,6 @@ class ZaiClient(
       Seq.empty
     }
   }
-
-  /**
-   * Parse argument JSON from a string, returning the raw string if parsing fails.
-   * This avoids null semantics in Scala code by using an Option-compatible pattern.
-   *
-   * @param raw Raw JSON string to parse
-   * @return Parsed JSON, or raw string if parsing fails
-   */
-  private[provider] def parseStreamingArguments(raw: String): ujson.Value =
-    if (raw.isEmpty) ujson.Obj() else scala.util.Try(ujson.read(raw)).getOrElse(ujson.Str(raw))
 
   /**
    * Test-visible seam for request serialization; intentionally scoped to provider package to avoid broader API surface.

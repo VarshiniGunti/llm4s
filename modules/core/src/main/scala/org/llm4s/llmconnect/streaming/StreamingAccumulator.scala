@@ -57,8 +57,10 @@ class StreamingAccumulator {
         toolCall.arguments match {
           case ujson.Str(raw) if raw.nonEmpty =>
             partial.argumentsBuilder.append(raw)
-          case args if args != ujson.Null && args != ujson.Obj() =>
-            partial.argumentsBuilder.append(args.render())
+          case obj: ujson.Obj if obj.obj.nonEmpty =>
+            partial.argumentsBuilder.append(obj.render())
+          case arr: ujson.Arr =>
+            partial.argumentsBuilder.append(arr.render())
           case _ =>
         }
       }
