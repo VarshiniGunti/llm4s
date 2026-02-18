@@ -5,6 +5,9 @@ import org.scalatest.matchers.should.Matchers
 
 import java.nio.file.{ Files, Path }
 import java.util.Base64
+import scala.concurrent.ExecutionContext.Implicits.global
+import scala.concurrent.Await
+import scala.concurrent.duration.DurationInt
 
 /**
  * Comprehensive test suite for the Image Generation API.
@@ -84,9 +87,25 @@ class ImageGenerationTest extends AnyFunSuite with Matchers {
       )
   }
 
+  class DefaultEditBehaviorClient extends ImageGenerationClient {
+    override def generateImage(
+      prompt: String,
+      options: ImageGenerationOptions = ImageGenerationOptions()
+    ): Either[ImageGenerationError, GeneratedImage] =
+      Left(UnsupportedOperation("not used"))
+
+    override def generateImages(
+      prompt: String,
+      count: Int,
+      options: ImageGenerationOptions = ImageGenerationOptions()
+    ): Either[ImageGenerationError, Seq[GeneratedImage]] =
+      Left(UnsupportedOperation("not used"))
+  }
+
   // ===== MODEL UNIT TESTS =====
 
   test("ImageSize provides correct dimensions") {
+    ImageSize.Auto.description shouldBe "auto"
     ImageSize.Square512.width shouldBe 512
     ImageSize.Square512.height shouldBe 512
     ImageSize.Square512.description shouldBe "512x512"
@@ -390,6 +409,15 @@ class ImageGenerationTest extends AnyFunSuite with Matchers {
     serviceError.code shouldBe 500
     validationError.message shouldBe "Invalid prompt"
     unknownError.message shouldBe "Something went wrong"
+  }
+
+  test("ImageGenerationClient default edit methods return unsupported operation") {
+    val client     = new DefaultEditBehaviorClient
+    val editResult = client.editImage(Path.of("sample.png"), "prompt")
+    editResult shouldBe Left(UnsupportedOperation("Image editing is not supported by this provider"))
+
+    val asyncResult = Await.result(client.editImageAsync(Path.of("sample.png"), "prompt"), 5.seconds)
+    asyncResult shouldBe Left(UnsupportedOperation("Async editing is not supported by this provider"))
   }
 
   // ===== INTEGRATION TESTS =====

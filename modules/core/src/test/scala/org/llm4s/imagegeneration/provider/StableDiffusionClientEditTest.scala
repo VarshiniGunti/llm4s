@@ -62,6 +62,23 @@ class StableDiffusionClientEditTest extends AnyFlatSpec with Matchers {
     }
   }
 
+  it should "fail when provider options are for another provider" in {
+    val client =
+      new StableDiffusionClient(StableDiffusionConfig(baseUrl = "http://localhost:7860"), HttpClient.create())
+
+    val result = client.editImage(
+      imagePath = java.nio.file.Path.of("does-not-exist.png"),
+      prompt = "add clouds",
+      options = ImageEditOptions(
+        providerOptions = Some(ProviderImageEditOptions.OpenAI(responseFormat = Some("b64_json")))
+      )
+    )
+
+    result shouldBe Left(
+      ValidationError("Unsupported provider-specific edit options for Stable Diffusion image client")
+    )
+  }
+
   private def writePng(path: java.nio.file.Path, width: Int, height: Int): Unit = {
     val image = new BufferedImage(width, height, BufferedImage.TYPE_INT_ARGB)
     ImageIO.write(image, "png", path.toFile)
