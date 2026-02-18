@@ -105,7 +105,7 @@ private[memory] trait BaseMemoryManagerOps extends MemoryManager {
         ""
       } else {
         val lines = memories.map { memory =>
-          val role = memory.getMetadata("role").getOrElse("unknown")
+          val role = memory.getMetadata("role").fold("unknown")(identity)
           s"[$role]: ${memory.content}"
         }
         s"Previous conversation:\n${lines.mkString("\n")}"
@@ -119,7 +119,7 @@ private[memory] trait BaseMemoryManagerOps extends MemoryManager {
       } else {
         val entityName = memories.headOption
           .flatMap(_.getMetadata("entity_name"))
-          .getOrElse(entityId.value)
+          .fold(entityId.value)(identity)
 
         val facts = memories.map(m => s"- ${m.content}")
         s"Known facts about $entityName:\n${facts.mkString("\n")}"
