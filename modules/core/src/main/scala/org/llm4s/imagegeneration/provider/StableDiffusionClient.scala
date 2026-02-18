@@ -4,10 +4,7 @@ import org.llm4s.imagegeneration._
 import org.slf4j.LoggerFactory
 import upickle.default._
 
-import java.io.File
-import java.nio.file.{ Files, Paths }
 import java.util.Base64
-import javax.imageio.ImageIO
 import scala.util.Try
 
 /**
@@ -63,7 +60,9 @@ class StableDiffusionClient(config: StableDiffusionConfig) extends ImageGenerati
     prompt: String,
     options: ImageGenerationOptions = ImageGenerationOptions()
   ): Either[ImageGenerationError, GeneratedImage] =
-    generateImages(prompt, 1, options).map(_.head)
+    generateImages(prompt, 1, options).flatMap { images =>
+      images.headOption.toRight(ValidationError("No images returned from Stable Diffusion txt2img endpoint"))
+    }
 
   override def generateImages(
     prompt: String,
@@ -85,15 +84,19 @@ class StableDiffusionClient(config: StableDiffusionConfig) extends ImageGenerati
     options: ImageEditOptions = ImageEditOptions()
   ): Either[ImageGenerationError, GeneratedImage] =
     for {
-      _            <- validatePrompt(prompt)
-      _            <- validateCount(options.n)
-      sourceImage  <- readImageFile(imagePath, "source image")
-      sourceSize   <- readImageSize(imagePath, "source image")
-      _            <- validateMaskDimensions(imagePath, maskPath)
-      sourceBase64 <- Right(Base64.getEncoder.encodeToString(sourceImage))
+      _                 <- validatePrompt(prompt)
+      _                 <- validateCount(options.n)
+      providerOpts      <- extractStableDiffusionEditOptions(options)
+      denoisingStrength <- validateDenoisingStrength(providerOpts.denoisingStrength)
+      sourceImage       <- ImageEditValidationUtils.readImageFile(imagePath, "source image")
+      sourceSize        <- ImageEditValidationUtils.readImageSize(imagePath, "source image")
+      _                 <- ImageEditValidationUtils.validateMaskDimensions(imagePath, maskPath)
+      sourceBase64      <- Right(Base64.getEncoder.encodeToString(sourceImage))
       maskBase64 <- maskPath match {
         case Some(path) =>
-          readImageFile(path, "mask image").map(bytes => Some(Base64.getEncoder.encodeToString(bytes)))
+          ImageEditValidationUtils
+            .readImageFile(path, "mask image")
+            .map(bytes => Some(Base64.getEncoder.encodeToString(bytes)))
         case None => Right(None)
       }
       outputSize <- Right(options.size.getOrElse(sourceSize))
@@ -103,7 +106,8 @@ class StableDiffusionClient(config: StableDiffusionConfig) extends ImageGenerati
           initImage = sourceBase64,
           maskImage = maskBase64,
           options = options,
-          outputSize = outputSize
+          outputSize = outputSize,
+          denoisingStrength = denoisingStrength
         )
       )
       response <- Try(makeHttpRequest(payload, "/sdapi/v1/img2img")).toEither.left.map(UnknownError.apply)
@@ -138,22 +142,24 @@ class StableDiffusionClient(config: StableDiffusionConfig) extends ImageGenerati
   private def validateCount(count: Int): Either[ImageGenerationError, Int] =
     Either.cond(count >= 1 && count <= 10, count, ValidationError("Count must be between 1 and 10"))
 
-  private def validateMaskDimensions(imagePath: String, maskPath: Option[String]): Either[ImageGenerationError, Unit] =
-    maskPath match {
-      case None => Right(())
-      case Some(mask) =>
-        for {
-          source <- readImageSize(imagePath, "source image")
-          edited <- readImageSize(mask, "mask image")
-          _ <- Either.cond(
-            source == edited,
-            (),
-            ValidationError(
-              s"Mask dimensions (${edited.width}x${edited.height}) must match source image dimensions (${source.width}x${source.height})"
-            )
-          )
-        } yield ()
+  private def extractStableDiffusionEditOptions(
+    options: ImageEditOptions
+  ): Either[ImageGenerationError, ProviderImageEditOptions.StableDiffusion] =
+    options.providerOptions match {
+      case None => Right(ProviderImageEditOptions.StableDiffusion())
+      case Some(stableDiffusion: ProviderImageEditOptions.StableDiffusion) => Right(stableDiffusion)
+      case Some(_) =>
+        Left(ValidationError("Unsupported provider-specific edit options for Stable Diffusion image client"))
     }
+
+  private def validateDenoisingStrength(value: Option[Double]): Either[ImageGenerationError, Double] = {
+    val resolved = value.getOrElse(0.75)
+    Either.cond(
+      resolved >= 0.0 && resolved <= 1.0,
+      resolved,
+      ValidationError(s"denoisingStrength must be between 0.0 and 1.0, got: $resolved")
+    )
+  }
 
   private def buildPayload(
     prompt: String,
@@ -180,7 +186,8 @@ class StableDiffusionClient(config: StableDiffusionConfig) extends ImageGenerati
     initImage: String,
     maskImage: Option[String],
     options: ImageEditOptions,
-    outputSize: ImageSize
+    outputSize: ImageSize,
+    denoisingStrength: Double
   ): ujson.Value = {
     val payload = StableDiffusionImg2ImgPayload(
       prompt = prompt,
@@ -194,7 +201,7 @@ class StableDiffusionClient(config: StableDiffusionConfig) extends ImageGenerati
       seed = -1L,
       sampler_name = "Euler a",
       init_images = Seq(initImage),
-      denoising_strength = 0.75,
+      denoising_strength = denoisingStrength,
       mask = maskImage
     )
     writeJs(payload)
@@ -254,37 +261,4 @@ class StableDiffusionClient(config: StableDiffusionConfig) extends ImageGenerati
       }
   }
 
-  private def readImageFile(path: String, label: String): Either[ImageGenerationError, Array[Byte]] = {
-    val nioPath = Paths.get(path)
-    if (!Files.exists(nioPath)) {
-      Left(ValidationError(s"$label does not exist at path: $path"))
-    } else {
-      Try(Files.readAllBytes(nioPath)).toEither.left.map(ex =>
-        ServiceError(s"Failed to read $label: ${ex.getMessage}", 500)
-      )
-    }
-  }
-
-  private def readImageSize(path: String, label: String): Either[ImageGenerationError, ImageSize] = {
-    val file = new File(path)
-    if (!file.exists()) {
-      Left(ValidationError(s"$label does not exist at path: $path"))
-    } else {
-      Try(ImageIO.read(file)).toEither.left
-        .map(ex => ServiceError(s"Failed to read $label dimensions: ${ex.getMessage}", 500))
-        .flatMap {
-          case null => Left(ValidationError(s"$label is not a valid image: $path"))
-          case img  => Right(toImageSize(img.getWidth, img.getHeight))
-        }
-    }
-  }
-
-  private def toImageSize(width: Int, height: Int): ImageSize =
-    (width, height) match {
-      case (512, 512)   => ImageSize.Square512
-      case (1024, 1024) => ImageSize.Square1024
-      case (768, 512)   => ImageSize.Landscape768x512
-      case (512, 768)   => ImageSize.Portrait512x768
-      case _            => ImageSize.Custom(width, height)
-    }
 }

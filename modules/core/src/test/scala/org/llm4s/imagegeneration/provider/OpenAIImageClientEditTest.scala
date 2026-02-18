@@ -60,7 +60,9 @@ class OpenAIImageClientEditTest extends AnyFlatSpec with Matchers {
     ImageIO.write(image, "png", path.toFile)
   }
 
-  private def withTempFiles[A](sourcePrefix: String, maskPrefix: String)(f: (java.nio.file.Path, java.nio.file.Path) => A): A =
+  private def withTempFiles[A](sourcePrefix: String, maskPrefix: String)(
+    f: (java.nio.file.Path, java.nio.file.Path) => A
+  ): A =
     Using.Manager { use =>
       val source = use(tempFile(sourcePrefix))
       val mask   = use(tempFile(maskPrefix))

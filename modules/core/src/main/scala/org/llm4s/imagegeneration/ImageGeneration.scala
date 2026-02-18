@@ -250,11 +250,14 @@ trait ImageGenerationClient {
 
   /** Edit an existing image using a text prompt (optionally with a mask for inpainting). */
   def editImage(
-    imagePath: String,
-    prompt: String,
-    maskPath: Option[String] = None,
-    options: ImageEditOptions = ImageEditOptions()
-  ): Either[ImageGenerationError, GeneratedImage]
+    _imagePath: String,
+    _prompt: String,
+    _maskPath: Option[String] = None,
+    _options: ImageEditOptions = ImageEditOptions()
+  ): Either[ImageGenerationError, GeneratedImage] = {
+    val _ = (_imagePath, _prompt, _maskPath, _options)
+    Left(ValidationError("Image editing not supported by this provider"))
+  }
 
   /** Check the health/status of the image generation service */
   def health(): Either[ImageGenerationError, ServiceStatus]

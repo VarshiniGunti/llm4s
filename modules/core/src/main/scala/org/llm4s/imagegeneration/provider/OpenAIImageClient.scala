@@ -4,14 +4,12 @@ import org.llm4s.imagegeneration._
 import org.slf4j.LoggerFactory
 import ujson._
 
-import java.io.File
 import java.net.URI
 import java.net.http.{ HttpClient => JHttpClient, HttpRequest, HttpResponse }
 import java.nio.charset.StandardCharsets
 import java.nio.file.{ Files, Paths }
 import java.time.{ Duration, Instant }
 import java.util.UUID
-import javax.imageio.ImageIO
 import scala.util.Try
 
 /**
@@ -31,7 +29,9 @@ class OpenAIImageClient(config: OpenAIConfig) extends ImageGenerationClient {
     prompt: String,
     options: ImageGenerationOptions = ImageGenerationOptions()
   ): Either[ImageGenerationError, GeneratedImage] =
-    generateImages(prompt, 1, options).map(_.head)
+    generateImages(prompt, 1, options).flatMap { images =>
+      images.headOption.toRight(ValidationError("No images returned from OpenAI image generation endpoint"))
+    }
 
   override def generateImages(
     prompt: String,
@@ -56,17 +56,17 @@ class OpenAIImageClient(config: OpenAIConfig) extends ImageGenerationClient {
   ): Either[ImageGenerationError, GeneratedImage] = {
     logger.info(s"Editing image with prompt: ${prompt.take(100)}...")
     for {
-      validPrompt <- validatePrompt(prompt)
-      _           <- validateCount(options.n)
+      validPrompt   <- validatePrompt(prompt)
+      _             <- validateCount(options.n)
       openAIOptions <- extractOpenAIEditOptions(options)
       _             <- validateResponseFormat(openAIOptions.responseFormat, "edit")
       _             <- validateOutputFormat(openAIOptions.outputFormat)
       _             <- validateOutputCompression(openAIOptions.outputCompression)
-      sourceImage <- readImageFile(imagePath, "source image")
-      sourceSize  <- readImageSize(imagePath, "source image")
-      _           <- validateMaskDimensions(imagePath, maskPath)
+      sourceImage   <- ImageEditValidationUtils.readImageFile(imagePath, "source image")
+      sourceSize    <- ImageEditValidationUtils.readImageSize(imagePath, "source image")
+      _             <- ImageEditValidationUtils.validateMaskDimensions(imagePath, maskPath)
       maskImage <- maskPath match {
-        case Some(path) => readImageFile(path, "mask image").map(Some(_))
+        case Some(path) => ImageEditValidationUtils.readImageFile(path, "mask image").map(Some(_))
         case None       => Right(None)
       }
       outputSize <- resolveEditOutputSize(options.size, sourceSize)
@@ -177,48 +177,6 @@ class OpenAIImageClient(config: OpenAIConfig) extends ImageGenerationClient {
       Right(())
     }
 
-  private def validateMaskDimensions(imagePath: String, maskPath: Option[String]): Either[ImageGenerationError, Unit] =
-    maskPath match {
-      case None => Right(())
-      case Some(mask) =>
-        for {
-          sourceSize <- readImageSize(imagePath, "source image")
-          maskSize   <- readImageSize(mask, "mask image")
-          _ <- Either.cond(
-            sourceSize == maskSize,
-            (),
-            ValidationError(
-              s"Mask dimensions (${maskSize.width}x${maskSize.height}) must match source image dimensions (${sourceSize.width}x${sourceSize.height})"
-            )
-          )
-        } yield ()
-    }
-
-  private def readImageFile(path: String, label: String): Either[ImageGenerationError, Array[Byte]] = {
-    val nioPath = Paths.get(path)
-    if (!Files.exists(nioPath)) {
-      Left(ValidationError(s"$label does not exist at path: $path"))
-    } else {
-      Try(Files.readAllBytes(nioPath)).toEither.left.map(ex =>
-        ServiceError(s"Failed to read $label: ${ex.getMessage}", 500)
-      )
-    }
-  }
-
-  private def readImageSize(path: String, label: String): Either[ImageGenerationError, ImageSize] = {
-    val file = new File(path)
-    if (!file.exists()) {
-      Left(ValidationError(s"$label does not exist at path: $path"))
-    } else {
-      Try(ImageIO.read(file)).toEither.left
-        .map(ex => ServiceError(s"Failed to read $label dimensions: ${ex.getMessage}", 500))
-        .flatMap {
-          case null => Left(ValidationError(s"$label is not a valid image: $path"))
-          case img  => Right(toImageSize(img.getWidth, img.getHeight))
-        }
-    }
-  }
-
   private def resolveEditOutputSize(
     requestedSize: Option[ImageSize],
     sourceSize: ImageSize
@@ -248,19 +206,10 @@ class OpenAIImageClient(config: OpenAIConfig) extends ImageGenerationClient {
     options: ImageEditOptions
   ): Either[ImageGenerationError, ProviderImageEditOptions.OpenAI] =
     options.providerOptions match {
-      case None => Right(ProviderImageEditOptions.OpenAI())
+      case None                                          => Right(ProviderImageEditOptions.OpenAI())
       case Some(openAI: ProviderImageEditOptions.OpenAI) => Right(openAI)
       case Some(_) =>
         Left(ValidationError("Unsupported provider-specific edit options for OpenAI image client"))
-    }
-
-  private def toImageSize(width: Int, height: Int): ImageSize =
-    (width, height) match {
-      case (512, 512)   => ImageSize.Square512
-      case (1024, 1024) => ImageSize.Square1024
-      case (768, 512)   => ImageSize.Landscape768x512
-      case (512, 768)   => ImageSize.Portrait512x768
-      case _            => ImageSize.Custom(width, height)
     }
 
   private def isDallE2Model: Boolean = config.model == "dall-e-2"
@@ -478,8 +427,12 @@ class OpenAIImageClient(config: OpenAIConfig) extends ImageGenerationClient {
       )
     }.toSeq
 
-    logger.info(s"Successfully generated ${images.length} image(s)")
-    Right(images)
+    if (images.isEmpty) {
+      Left(ValidationError("No images returned from OpenAI API response"))
+    } else {
+      logger.info(s"Successfully generated ${images.length} image(s)")
+      Right(images)
+    }
   }
 
   private def warnIfDeprecatedModelConfigured(): Unit =

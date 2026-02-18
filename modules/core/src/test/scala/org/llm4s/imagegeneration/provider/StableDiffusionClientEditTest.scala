@@ -1,6 +1,6 @@
 package org.llm4s.imagegeneration.provider
 
-import org.llm4s.imagegeneration.{ ImageEditOptions, StableDiffusionConfig, ValidationError }
+import org.llm4s.imagegeneration.{ ImageEditOptions, ProviderImageEditOptions, StableDiffusionConfig, ValidationError }
 import org.scalatest.flatspec.AnyFlatSpec
 import org.scalatest.matchers.should.Matchers
 
@@ -40,12 +40,33 @@ class StableDiffusionClientEditTest extends AnyFlatSpec with Matchers {
     }
   }
 
+  it should "fail when denoising strength is out of range" in {
+    val client = new StableDiffusionClient(StableDiffusionConfig(baseUrl = "http://localhost:7860"))
+
+    withTempFiles("sd-source", "sd-mask") { (source, _) =>
+      writePng(source, width = 128, height = 128)
+
+      val result = client.editImage(
+        imagePath = source.toString,
+        prompt = "remove object",
+        options = ImageEditOptions(
+          n = 1,
+          providerOptions = Some(ProviderImageEditOptions.StableDiffusion(denoisingStrength = Some(1.5)))
+        )
+      )
+
+      result shouldBe Left(ValidationError("denoisingStrength must be between 0.0 and 1.0, got: 1.5"))
+    }
+  }
+
   private def writePng(path: java.nio.file.Path, width: Int, height: Int): Unit = {
     val image = new BufferedImage(width, height, BufferedImage.TYPE_INT_ARGB)
     ImageIO.write(image, "png", path.toFile)
   }
 
-  private def withTempFiles[A](sourcePrefix: String, maskPrefix: String)(f: (java.nio.file.Path, java.nio.file.Path) => A): A =
+  private def withTempFiles[A](sourcePrefix: String, maskPrefix: String)(
+    f: (java.nio.file.Path, java.nio.file.Path) => A
+  ): A =
     Using.Manager { use =>
       val source = use(tempFile(sourcePrefix))
       val mask   = use(tempFile(maskPrefix))
