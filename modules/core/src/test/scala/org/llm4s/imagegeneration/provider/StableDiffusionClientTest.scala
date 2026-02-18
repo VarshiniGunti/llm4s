@@ -6,6 +6,8 @@ import org.scalatest.concurrent.ScalaFutures
 import org.llm4s.imagegeneration._
 import org.llm4s.http.{ HttpResponse, MultipartPart }
 import java.nio.file.{ Files, Paths }
+import java.awt.image.BufferedImage
+import javax.imageio.ImageIO
 import scala.concurrent.ExecutionContext.Implicits.global
 import scala.util.{ Try, Success, Failure }
 
@@ -88,11 +90,8 @@ class StableDiffusionClientTest extends AnyFunSuite with Matchers with ScalaFutu
   }
 
   test("editImage success flow") {
-    // Create dummy files
-    val tempImage = Files.createTempFile("test-image", ".png")
-    Files.write(tempImage, "dummy-image-data".getBytes)
-    val tempMask = Files.createTempFile("test-mask", ".png")
-    Files.write(tempMask, "dummy-mask-data".getBytes)
+    val tempImage = createTempPng("test-image", 64, 64)
+    val tempMask  = createTempPng("test-mask", 64, 64)
 
     try {
       val successJson  = """{"images": ["base64encodedimage"]}"""
@@ -115,8 +114,7 @@ class StableDiffusionClientTest extends AnyFunSuite with Matchers with ScalaFutu
   }
 
   test("editImage handles API error (non-200)") {
-    val tempImage = Files.createTempFile("test-image", ".png")
-    Files.write(tempImage, "dummy-data".getBytes)
+    val tempImage = createTempPng("test-image", 64, 64)
 
     try {
       val mockResponse = createResponse(500, "Error")
@@ -130,8 +128,7 @@ class StableDiffusionClientTest extends AnyFunSuite with Matchers with ScalaFutu
   }
 
   test("editImage handles connection error") {
-    val tempImage = Files.createTempFile("test-image", ".png")
-    Files.write(tempImage, "dummy-data".getBytes)
+    val tempImage = createTempPng("test-image", 64, 64)
 
     try {
       val httpClient = new MockHttpClient(Failure(new Exception("Connection refused")))
@@ -170,8 +167,7 @@ class StableDiffusionClientTest extends AnyFunSuite with Matchers with ScalaFutu
     }
 
     // editImageAsync
-    val tempImage = Files.createTempFile("test-image", ".png")
-    Files.write(tempImage, "dummy".getBytes)
+    val tempImage = createTempPng("test-image", 64, 64)
     try
       whenReady(client.editImageAsync(tempImage, "prompt")) { result =>
         result.isRight shouldBe true
@@ -179,5 +175,12 @@ class StableDiffusionClientTest extends AnyFunSuite with Matchers with ScalaFutu
       }
     finally
       Files.deleteIfExists(tempImage)
+  }
+
+  private def createTempPng(prefix: String, width: Int, height: Int) = {
+    val path  = Files.createTempFile(prefix, ".png")
+    val image = new BufferedImage(width, height, BufferedImage.TYPE_INT_ARGB)
+    ImageIO.write(image, "png", path.toFile)
+    path
   }
 }

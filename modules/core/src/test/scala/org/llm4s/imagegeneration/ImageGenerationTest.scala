@@ -214,7 +214,7 @@ class ImageGenerationTest extends AnyFunSuite with Matchers {
   test("openAIClient creates client with default GPT image model") {
     val client = ImageGeneration.openAIClient(apiKey = "test-key")
 
-    client shouldBe a[org.llm4s.imagegeneration.provider.OpenAIImageClient]
+    client should matchPattern { case Right(_: org.llm4s.imagegeneration.provider.OpenAIImageClient) => }
   }
 
   test("Config objects have correct default values") {

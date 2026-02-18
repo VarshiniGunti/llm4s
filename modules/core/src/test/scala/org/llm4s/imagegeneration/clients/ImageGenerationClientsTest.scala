@@ -11,6 +11,8 @@ import org.scalatest.matchers.should.Matchers
 import org.scalatest.concurrent.ScalaFutures
 import scala.util.Success
 import java.io.File
+import java.awt.image.BufferedImage
+import javax.imageio.ImageIO
 import scala.concurrent.ExecutionContext.Implicits.global
 
 class ImageGenerationClientsTest
@@ -170,7 +172,7 @@ class ImageGenerationClientsTest
     }"""
     (mockHttpClient.postMultipart _).when(*, *, *, *).returns(Success(createResponse(200, responseBody)))
 
-    val tempFile = File.createTempFile("test", ".png")
+    val tempFile = createTempPngFile("test")
     try {
       val result = client.editImage(tempFile.toPath, "edit prompt")
       result.isRight shouldBe true
@@ -221,7 +223,7 @@ class ImageGenerationClientsTest
       result.value.length shouldBe 1
     }
 
-    val tempFile = File.createTempFile("test", ".png")
+    val tempFile = createTempPngFile("test")
     try {
       val editResponseBody = """{"created": 1234567890, "data": [{"b64_json": "edited"}]}"""
       (mockHttpClient.postMultipart _).when(*, *, *, *).returns(Success(createResponse(200, editResponseBody)))
@@ -439,5 +441,12 @@ class ImageGenerationClientsTest
     val client = HttpClient.create()
     val result = client.post("http://0.0.0.0:0/invalid", Map.empty, "", 100)
     result.isFailure shouldBe true
+  }
+
+  private def createTempPngFile(prefix: String): File = {
+    val file  = File.createTempFile(prefix, ".png")
+    val image = new BufferedImage(512, 512, BufferedImage.TYPE_INT_ARGB)
+    ImageIO.write(image, "png", file)
+    file
   }
 }
