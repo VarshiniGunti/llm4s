@@ -3,7 +3,7 @@ package org.llm4s.imagegeneration
 import org.scalatest.funsuite.AnyFunSuite
 import org.scalatest.matchers.should.Matchers
 
-import java.nio.file.Files
+import java.nio.file.{ Files, Path }
 import java.util.Base64
 
 /**
@@ -59,18 +59,18 @@ class ImageGenerationTest extends AnyFunSuite with Matchers {
     }
 
     override def editImage(
-      imagePath: String,
+      imagePath: Path,
       prompt: String,
-      maskPath: Option[String] = None,
+      maskPath: Option[Path] = None,
       options: ImageEditOptions = ImageEditOptions()
-    ): Either[ImageGenerationError, GeneratedImage] = {
+    ): Either[ImageGenerationError, Seq[GeneratedImage]] = {
       if (prompt.trim.isEmpty) {
         return Left(ValidationError("Prompt cannot be empty"))
       }
-      if (imagePath.trim.isEmpty) {
+      if (imagePath.toString.trim.isEmpty) {
         return Left(ValidationError("Image path cannot be empty"))
       }
-      generateImage(prompt, ImageGenerationOptions(size = options.size.getOrElse(ImageSize.Square512)))
+      generateImage(prompt, ImageGenerationOptions(size = options.size.getOrElse(ImageSize.Square512))).map(Seq(_))
     }
 
     override def health(): Either[ImageGenerationError, ServiceStatus] =
@@ -116,9 +116,6 @@ class ImageGenerationTest extends AnyFunSuite with Matchers {
     options.quality shouldBe None
     options.style shouldBe None
     options.responseFormat shouldBe None
-    options.outputFormat shouldBe None
-    options.background shouldBe None
-    options.outputCompression shouldBe None
     options.user shouldBe None
   }
 
@@ -320,18 +317,20 @@ class ImageGenerationTest extends AnyFunSuite with Matchers {
 
   test("Mock client supports edit image flow") {
     val result = mockClient.editImage(
-      imagePath = "sample.png",
+      imagePath = Path.of("sample.png"),
       prompt = "add fog in the background",
       maskPath = None,
       options = ImageEditOptions(size = Some(ImageSize.Square1024))
     )
 
     result match {
-      case Right(image) =>
+      case Right(Seq(image)) =>
         image.prompt shouldBe "add fog in the background"
         image.size shouldBe ImageSize.Square1024
       case Left(error) =>
         fail(s"Expected successful image edit, but got error: $error")
+      case Right(other) =>
+        fail(s"Expected a single image, got ${other.size}")
     }
   }
 

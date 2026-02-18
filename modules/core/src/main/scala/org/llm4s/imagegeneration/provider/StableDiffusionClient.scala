@@ -143,9 +143,10 @@ class StableDiffusionClient(config: StableDiffusionConfig, httpClient: HttpClien
     options: ImageEditOptions = ImageEditOptions()
   ): Either[ImageGenerationError, Seq[GeneratedImage]] = {
     val providerOptions = options.providerOptions match {
-      case None                                                          => Right(ProviderImageEditOptions.StableDiffusion())
-      case Some(sd: ProviderImageEditOptions.StableDiffusion)            => Right(sd)
-      case Some(_) => Left(ValidationError("Unsupported provider-specific edit options for Stable Diffusion image client"))
+      case None                                               => Right(ProviderImageEditOptions.StableDiffusion())
+      case Some(sd: ProviderImageEditOptions.StableDiffusion) => Right(sd)
+      case Some(_) =>
+        Left(ValidationError("Unsupported provider-specific edit options for Stable Diffusion image client"))
     }
 
     def validateDenoisingStrength(value: Option[Double]): Either[ImageGenerationError, Double] = {
@@ -165,9 +166,10 @@ class StableDiffusionClient(config: StableDiffusionConfig, httpClient: HttpClien
       _                 <- ImageEditValidationUtils.validateMaskDimensions(sourceSize, maskPath)
       img               <- Right(Base64.getEncoder.encodeToString(sourceImage))
       mask <- maskPath match {
-        case Some(path) => ImageEditValidationUtils.readImageFile(path, "mask image").map(bytes =>
-            Some(Base64.getEncoder.encodeToString(bytes))
-          )
+        case Some(path) =>
+          ImageEditValidationUtils
+            .readImageFile(path, "mask image")
+            .map(bytes => Some(Base64.getEncoder.encodeToString(bytes)))
         case None => Right(None)
       }
       // Convert ImageEditOptions to ImageGenerationOptions for response parsing

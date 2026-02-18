@@ -36,8 +36,8 @@ sealed trait ImageSize {
 
 object ImageSize {
   case object Auto extends ImageSize {
-    val width  = 0
-    val height = 0
+    val width                        = 0
+    val height                       = 0
     override def description: String = "auto"
   }
   case object Square512 extends ImageSize {

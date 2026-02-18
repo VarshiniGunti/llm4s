@@ -114,7 +114,9 @@ class OpenAIImageClient(config: OpenAIConfig, httpClient: HttpClient) extends Im
         MultipartPart.TextField("prompt", prompt),
         MultipartPart.TextField("n", options.n.toString),
         openAIOptions.responseFormat
-          .fold(MultipartPart.TextField("response_format", "b64_json"))(rf => MultipartPart.TextField("response_format", rf))
+          .fold(MultipartPart.TextField("response_format", "b64_json"))(rf =>
+            MultipartPart.TextField("response_format", rf)
+          )
       )
 
       parts += MultipartPart.TextField("model", "dall-e-2")
@@ -144,7 +146,11 @@ class OpenAIImageClient(config: OpenAIConfig, httpClient: HttpClient) extends Im
           )
           parseResponse(response, prompt, genOptions)
             .flatMap(images =>
-              Either.cond(images.nonEmpty, images, ValidationError("No images returned from OpenAI image edit endpoint"))
+              Either.cond(
+                images.nonEmpty,
+                images,
+                ValidationError("No images returned from OpenAI image edit endpoint")
+              )
             )
         } else {
           handleErrorResponse(response).flatMap(_ =>

@@ -142,18 +142,20 @@ object ImageGenerationExample {
     val config      = StableDiffusionConfig()
 
     ImageGeneration.editImage(
-      imagePath = sourceImage.toString,
+      imagePath = sourceImage,
       prompt = "replace the sky with a dramatic sunset",
+      maskPath = Some(maskImage),
       config = config,
-      maskPath = Some(maskImage.toString),
       options = ImageEditOptions(
         size = Some(ImageSize.Square512),
         n = 1
       )
     ) match {
-      case Right(editedImage) =>
+      case Right(editedImages) if editedImages.nonEmpty =>
         val output = Paths.get("edited_output.png")
-        editedImage.saveToFile(output).foreach(_ => logger.info(s"Edited image saved to: $output"))
+        editedImages.head.saveToFile(output).foreach(_ => logger.info(s"Edited image saved to: $output"))
+      case Right(_) =>
+        logger.info("Image editing returned no images")
       case Left(error) =>
         logger.info(s"Image editing failed (expected if input files are missing): ${error.message}")
     }

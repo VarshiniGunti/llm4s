@@ -12,10 +12,10 @@ import scala.util.Using
 class OpenAIImageClientEditTest extends AnyFlatSpec with Matchers {
 
   "editImage" should "fail when source image does not exist" in {
-    val client = new OpenAIImageClient(OpenAIConfig(apiKey = "test-key"))
+    val client = new OpenAIImageClient(OpenAIConfig(apiKey = "test-key"), HttpClient.create())
 
     val result = client.editImage(
-      imagePath = "does-not-exist.png",
+      imagePath = java.nio.file.Path.of("does-not-exist.png"),
       prompt = "add clouds"
     )
 
@@ -23,10 +23,10 @@ class OpenAIImageClientEditTest extends AnyFlatSpec with Matchers {
   }
 
   it should "fail when response format is unsupported" in {
-    val client = new OpenAIImageClient(OpenAIConfig(apiKey = "test-key"))
+    val client = new OpenAIImageClient(OpenAIConfig(apiKey = "test-key"), HttpClient.create())
 
     val result = client.editImage(
-      imagePath = "does-not-matter.png",
+      imagePath = java.nio.file.Path.of("does-not-matter.png"),
       prompt = "add clouds",
       options = ImageEditOptions(
         providerOptions = Some(
@@ -39,16 +39,16 @@ class OpenAIImageClientEditTest extends AnyFlatSpec with Matchers {
   }
 
   it should "fail when mask dimensions do not match source image dimensions" in {
-    val client = new OpenAIImageClient(OpenAIConfig(apiKey = "test-key"))
+    val client = new OpenAIImageClient(OpenAIConfig(apiKey = "test-key"), HttpClient.create())
 
     withTempFiles("openai-source", "openai-mask") { (source, mask) =>
       writePng(source, width = 64, height = 64)
       writePng(mask, width = 32, height = 32)
 
       val result = client.editImage(
-        imagePath = source.toString,
+        imagePath = source,
         prompt = "inpaint sky",
-        maskPath = Some(mask.toString)
+        maskPath = Some(mask)
       )
 
       result should matchPattern { case Left(_: ValidationError) => }

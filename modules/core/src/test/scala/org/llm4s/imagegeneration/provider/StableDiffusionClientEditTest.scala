@@ -12,10 +12,11 @@ import scala.util.Using
 class StableDiffusionClientEditTest extends AnyFlatSpec with Matchers {
 
   "editImage" should "fail when source image does not exist" in {
-    val client = new StableDiffusionClient(StableDiffusionConfig(baseUrl = "http://localhost:7860"))
+    val client =
+      new StableDiffusionClient(StableDiffusionConfig(baseUrl = "http://localhost:7860"), HttpClient.create())
 
     val result = client.editImage(
-      imagePath = "does-not-exist.png",
+      imagePath = java.nio.file.Path.of("does-not-exist.png"),
       prompt = "add clouds"
     )
 
@@ -23,16 +24,17 @@ class StableDiffusionClientEditTest extends AnyFlatSpec with Matchers {
   }
 
   it should "fail when mask dimensions do not match source image dimensions" in {
-    val client = new StableDiffusionClient(StableDiffusionConfig(baseUrl = "http://localhost:7860"))
+    val client =
+      new StableDiffusionClient(StableDiffusionConfig(baseUrl = "http://localhost:7860"), HttpClient.create())
 
     withTempFiles("sd-source", "sd-mask") { (source, mask) =>
       writePng(source, width = 128, height = 128)
       writePng(mask, width = 64, height = 64)
 
       val result = client.editImage(
-        imagePath = source.toString,
+        imagePath = source,
         prompt = "remove foreground object",
-        maskPath = Some(mask.toString),
+        maskPath = Some(mask),
         options = ImageEditOptions(n = 1)
       )
 
@@ -41,13 +43,14 @@ class StableDiffusionClientEditTest extends AnyFlatSpec with Matchers {
   }
 
   it should "fail when denoising strength is out of range" in {
-    val client = new StableDiffusionClient(StableDiffusionConfig(baseUrl = "http://localhost:7860"))
+    val client =
+      new StableDiffusionClient(StableDiffusionConfig(baseUrl = "http://localhost:7860"), HttpClient.create())
 
     withTempFiles("sd-source", "sd-mask") { (source, _) =>
       writePng(source, width = 128, height = 128)
 
       val result = client.editImage(
-        imagePath = source.toString,
+        imagePath = source,
         prompt = "remove object",
         options = ImageEditOptions(
           n = 1,
