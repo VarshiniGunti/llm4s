@@ -220,7 +220,7 @@ class ImageGenerationTest extends AnyFunSuite with Matchers {
     hfConfig.provider shouldBe ImageGenerationProvider.HuggingFace
 
     val openAIConfig = OpenAIConfig(apiKey = "test-key")
-    openAIConfig.model shouldBe "gpt-image-1"
+    openAIConfig.model shouldBe "dall-e-2"
     openAIConfig.timeout shouldBe 30000
     openAIConfig.provider shouldBe ImageGenerationProvider.DALLE
   }

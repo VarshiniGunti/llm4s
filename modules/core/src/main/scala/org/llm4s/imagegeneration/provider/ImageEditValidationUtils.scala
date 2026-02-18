@@ -35,15 +35,14 @@ private[provider] object ImageEditValidationUtils {
   }
 
   def validateMaskDimensions(
-    sourceImagePath: String,
+    sourceSize: ImageSize,
     maskPath: Option[String]
   ): Either[ImageGenerationError, Unit] =
     maskPath match {
       case None => Right(())
       case Some(mask) =>
         for {
-          sourceSize <- readImageSize(sourceImagePath, "source image")
-          maskSize   <- readImageSize(mask, "mask image")
+          maskSize <- readImageSize(mask, "mask image")
           _ <- Either.cond(
             sourceSize == maskSize,
             (),

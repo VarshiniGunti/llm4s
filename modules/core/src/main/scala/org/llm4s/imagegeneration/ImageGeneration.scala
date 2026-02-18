@@ -32,6 +32,11 @@ sealed trait ImageSize {
 }
 
 object ImageSize {
+  case object Auto extends ImageSize {
+    val width  = 0
+    val height = 0
+    override def description: String = "auto"
+  }
   case object Square512 extends ImageSize {
     val width  = 512
     val height = 512
@@ -217,14 +222,14 @@ case class HuggingFaceConfig(
  * Configuration for OpenAI Images API.
  *
  * @param apiKey Your OpenAI API key. This is required for authentication.
- * @param model The image model to use (defaults to gpt-image-1).
+ * @param model The image model to use (defaults to dall-e-2).
  * @param timeout Request timeout in milliseconds.
  */
 case class OpenAIConfig(
   /** OpenAI API key */
   apiKey: String,
-  /** Model to use (for example gpt-image-1, dall-e-2, or dall-e-3) */
-  model: String = "gpt-image-1",
+  /** Model to use (for example dall-e-2, dall-e-3, or gpt-image-1) */
+  model: String = "dall-e-2",
   /** Request timeout in milliseconds */
   override val timeout: Int = 30000 // 30 seconds for image generation
 ) extends ImageGenerationConfig {
@@ -340,12 +345,12 @@ object ImageGeneration {
    * OpenAI Images API for image generation.
    *
    * @param apiKey Your OpenAI API key (required).
-   * @param model The image model to use. Defaults to gpt-image-1.
+   * @param model The image model to use. Defaults to dall-e-2.
    * @return An `ImageGenerationClient` instance configured for OpenAI Images.
    */
   def openAIClient(
     apiKey: String,
-    model: String = "gpt-image-1"
+    model: String = "dall-e-2"
   ): ImageGenerationClient = {
     val config = OpenAIConfig(apiKey = apiKey, model = model)
     client(config)
@@ -366,7 +371,7 @@ object ImageGeneration {
     prompt: String,
     apiKey: String,
     options: ImageGenerationOptions = ImageGenerationOptions(),
-    model: String = "gpt-image-1"
+    model: String = "dall-e-2"
   ): Either[ImageGenerationError, GeneratedImage] = {
     val config = OpenAIConfig(apiKey = apiKey, model = model)
     generateImage(prompt, config, options)

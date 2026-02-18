@@ -90,7 +90,7 @@ class StableDiffusionClient(config: StableDiffusionConfig) extends ImageGenerati
       denoisingStrength <- validateDenoisingStrength(providerOpts.denoisingStrength)
       sourceImage       <- ImageEditValidationUtils.readImageFile(imagePath, "source image")
       sourceSize        <- ImageEditValidationUtils.readImageSize(imagePath, "source image")
-      _                 <- ImageEditValidationUtils.validateMaskDimensions(imagePath, maskPath)
+      _                 <- ImageEditValidationUtils.validateMaskDimensions(sourceSize, maskPath)
       sourceBase64      <- Right(Base64.getEncoder.encodeToString(sourceImage))
       maskBase64 <- maskPath match {
         case Some(path) =>

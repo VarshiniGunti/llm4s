@@ -64,7 +64,7 @@ class OpenAIImageClient(config: OpenAIConfig) extends ImageGenerationClient {
       _             <- validateOutputCompression(openAIOptions.outputCompression)
       sourceImage   <- ImageEditValidationUtils.readImageFile(imagePath, "source image")
       sourceSize    <- ImageEditValidationUtils.readImageSize(imagePath, "source image")
-      _             <- ImageEditValidationUtils.validateMaskDimensions(imagePath, maskPath)
+      _             <- ImageEditValidationUtils.validateMaskDimensions(sourceSize, maskPath)
       maskImage <- maskPath match {
         case Some(path) => ImageEditValidationUtils.readImageFile(path, "mask image").map(Some(_))
         case None       => Right(None)
@@ -235,7 +235,7 @@ class OpenAIImageClient(config: OpenAIConfig) extends ImageGenerationClient {
         if (isDallE3Model) "1024x1792"
         else if (isDallE2Model) "512x512"
         else "1024x1536"
-      case ImageSize.Custom(0, 0) => "auto"
+      case ImageSize.Auto         => "auto"
       case ImageSize.Custom(w, h) => s"${w}x${h}"
     }
 
@@ -409,30 +409,33 @@ class OpenAIImageClient(config: OpenAIConfig) extends ImageGenerationClient {
     format: ImageFormat,
     seed: Option[Long]
   ): Either[ImageGenerationError, Seq[GeneratedImage]] = {
-    val json       = read(responseText)
-    val imagesData = json("data").arr
+    Try {
+      val json       = read(responseText)
+      val imagesData = json("data").arr
 
-    val images = imagesData.map { imageData =>
-      val maybeB64 = imageData.obj.get("b64_json").collect { case Str(value) => value }
-      val maybeUrl = imageData.obj.get("url").collect { case Str(value) => value }
-      GeneratedImage(
-        data = maybeB64.getOrElse(""),
-        format = format,
-        size = size,
-        createdAt = Instant.now(),
-        prompt = prompt,
-        seed = seed,
-        filePath = None,
-        url = maybeUrl
-      )
-    }.toSeq
-
-    if (images.isEmpty) {
-      Left(ValidationError("No images returned from OpenAI API response"))
-    } else {
-      logger.info(s"Successfully generated ${images.length} image(s)")
-      Right(images)
-    }
+      imagesData.map { imageData =>
+        val maybeB64 = imageData.obj.get("b64_json").collect { case Str(value) => value }
+        val maybeUrl = imageData.obj.get("url").collect { case Str(value) => value }
+        GeneratedImage(
+          data = maybeB64.getOrElse(""),
+          format = format,
+          size = size,
+          createdAt = Instant.now(),
+          prompt = prompt,
+          seed = seed,
+          filePath = None,
+          url = maybeUrl
+        )
+      }.toSeq
+    }.toEither.left
+      .map(ex => UnknownError(ex))
+      .flatMap { images =>
+        if (images.isEmpty) Left(ValidationError("No images returned from OpenAI API response"))
+        else {
+          logger.info(s"Successfully generated ${images.length} image(s)")
+          Right(images)
+        }
+      }
   }
 
   private def warnIfDeprecatedModelConfigured(): Unit =
