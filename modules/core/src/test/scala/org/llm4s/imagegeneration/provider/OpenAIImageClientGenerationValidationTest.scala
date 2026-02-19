@@ -9,7 +9,7 @@ import scala.util.{ Success, Try }
 
 class OpenAIImageClientGenerationValidationTest extends AnyFlatSpec with Matchers {
 
-  private final class StubHttpClient(
+  final private class StubHttpClient(
     postResponse: HttpResponse = HttpResponse(200, """{"data":[{"b64_json":"Zm9v"}]}"""),
     getResponse: HttpResponse = HttpResponse(200, "{}")
   ) extends HttpClient {

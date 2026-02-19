@@ -121,6 +121,9 @@ class ImageGenerationTest extends AnyFunSuite with Matchers {
 
     ImageFormat.JPEG.extension shouldBe "jpg"
     ImageFormat.JPEG.mimeType shouldBe "image/jpeg"
+
+    ImageFormat.WEBP.extension shouldBe "webp"
+    ImageFormat.WEBP.mimeType shouldBe "image/webp"
   }
 
   test("ImageGenerationOptions has sensible defaults") {
@@ -135,6 +138,9 @@ class ImageGenerationTest extends AnyFunSuite with Matchers {
     options.quality shouldBe None
     options.style shouldBe None
     options.responseFormat shouldBe None
+    options.outputFormat shouldBe None
+    options.background shouldBe None
+    options.outputCompression shouldBe None
     options.user shouldBe None
   }
 
@@ -230,7 +236,7 @@ class ImageGenerationTest extends AnyFunSuite with Matchers {
     client should matchPattern { case Right(_: org.llm4s.imagegeneration.provider.OpenAIImageClient) => }
   }
 
-  test("openAIClient creates client with default GPT image model") {
+  test("openAIClient creates client with default model") {
     val client = ImageGeneration.openAIClient(apiKey = "test-key")
 
     client should matchPattern { case Right(_: org.llm4s.imagegeneration.provider.OpenAIImageClient) => }

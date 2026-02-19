@@ -33,6 +33,9 @@ object ImageGenerationExample {
 
     // Example 5: Image editing / inpainting
     imageEditingExample()
+
+    // Example 6: GPT Image models (opt-in via explicit model)
+    openAIGptImageExample()
   }
 
   def basicExample(): Unit = {
@@ -158,6 +161,41 @@ object ImageGenerationExample {
         logger.info("Image editing returned no images")
       case Left(error) =>
         logger.info(s"Image editing failed (expected if input files are missing): ${error.message}")
+    }
+  }
+
+  def openAIGptImageExample(): Unit = {
+    logger.info("\n--- OpenAI GPT Image Example (Opt-In) ---")
+
+    val maybeApiKey = sys.env.get("OPENAI_API_KEY")
+    maybeApiKey match {
+      case None =>
+        logger.info("Skipping OpenAI GPT Image example (OPENAI_API_KEY not set)")
+      case Some(apiKey) =>
+        val config = OpenAIConfig(
+          apiKey = apiKey,
+          model = "gpt-image-1.5"
+        )
+        val options = ImageGenerationOptions(
+          size = ImageSize.Auto,
+          responseFormat = Some("url"),
+          outputFormat = Some("png"),
+          background = Some("auto"),
+          outputCompression = Some(80)
+        )
+
+        ImageGeneration.generateImage(
+          prompt = "A studio product photo of a glass bottle with soft daylight",
+          config = config,
+          options = options
+        ) match {
+          case Right(image) =>
+            logger.info(
+              s"OpenAI image generated. URL: ${image.url.getOrElse("n/a")}, format: ${image.format.extension}"
+            )
+          case Left(error) =>
+            logger.info(s"OpenAI generation failed: ${error.message}")
+        }
     }
   }
 }

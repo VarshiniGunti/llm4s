@@ -83,6 +83,10 @@ object ImageFormat {
     val extension = "jpg"
     val mimeType  = "image/jpeg"
   }
+  case object WEBP extends ImageFormat {
+    val extension = "webp"
+    val mimeType  = "image/webp"
+  }
 }
 
 /** Options for image generation */
@@ -98,6 +102,9 @@ case class ImageGenerationOptions(
   quality: Option[String] = None,        // "standard" or "hd"
   style: Option[String] = None,          // "vivid" or "natural"
   responseFormat: Option[String] = None, // "url" or "b64_json"
+  outputFormat: Option[String] = None,   // "png", "jpeg", "webp"
+  background: Option[String] = None,     // "transparent", "opaque", "auto"
+  outputCompression: Option[Int] = None, // 0-100
   user: Option[String] = None            // End-user identifier for abuse monitoring
 )
 
