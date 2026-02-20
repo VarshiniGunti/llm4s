@@ -63,8 +63,10 @@ class GeminiClient(
   override def complete(
     conversation: Conversation,
     options: CompletionOptions
-  ): Result[Completion] = withMetrics("gemini", config.model) {
-    validateNotClosed.flatMap { _ =>
+  ): Result[Completion] = withMetrics(
+    provider = "gemini",
+    model = config.model,
+    operation = validateNotClosed.flatMap { _ =>
       TransformationResult.transform(config.model, options, conversation.messages, dropUnsupported = true).flatMap {
         transformed =>
           val transformedConversation = conversation.copy(messages = transformed.messages)
@@ -97,21 +99,19 @@ class GeminiClient(
 
           attempt
       }
-    }
-  }(
-    extractUsage = _.usage,
-    estimateCost = usage =>
-      org.llm4s.model.ModelRegistry.lookup(config.model).toOption.flatMap { meta =>
-        meta.pricing.estimateCost(usage.promptTokens, usage.completionTokens)
-      }
+    },
+    extractUsage = (c: Completion) => c.usage,
+    extractCost = (c: Completion) => c.estimatedCost
   )
 
   override def streamComplete(
     conversation: Conversation,
     options: CompletionOptions = CompletionOptions(),
     onChunk: StreamedChunk => Unit
-  ): Result[Completion] = withMetrics("gemini", config.model) {
-    validateNotClosed.flatMap { _ =>
+  ): Result[Completion] = withMetrics(
+    provider = "gemini",
+    model = config.model,
+    operation = validateNotClosed.flatMap { _ =>
       TransformationResult.transform(config.model, options, conversation.messages, dropUnsupported = true).flatMap {
         transformed =>
           val transformedConversation = conversation.copy(messages = transformed.messages)
@@ -140,41 +140,43 @@ class GeminiClient(
             val messageId   = UUID.randomUUID().toString
             val reader      = new BufferedReader(new InputStreamReader(response.body(), StandardCharsets.UTF_8))
 
-            val processEither = Try {
-              var line: String = null
-              while ({ line = reader.readLine(); line != null }) {
-                val trimmed = line.trim
-                // SSE format: lines starting with "data: " contain JSON
-                if (trimmed.startsWith("data: ")) {
-                  val jsonStr = trimmed.stripPrefix("data: ").trim
-                  if (jsonStr.nonEmpty) {
-                    Try(ujson.read(jsonStr)).foreach { json =>
-                      parseStreamChunk(json, messageId).foreach { chunk =>
-                        accumulator.addChunk(chunk)
-                        onChunk(chunk)
+            Try {
+              try {
+                var line: String = null
+                while ({ line = reader.readLine(); line != null }) {
+                  val trimmed = line.trim
+                  // SSE format: lines starting with "data: " contain JSON
+                  if (trimmed.startsWith("data: ")) {
+                    val jsonStr = trimmed.stripPrefix("data: ").trim
+                    if (jsonStr.nonEmpty) {
+                      Try(ujson.read(jsonStr)).foreach { json =>
+                        parseStreamChunk(json, messageId).foreach { chunk =>
+                          accumulator.addChunk(chunk)
+                          onChunk(chunk)
+                        }
                       }
                     }
                   }
                 }
+
+                // Close resources INSIDE Try block
+              } finally {
+                Try(reader.close())
+                Try(response.body().close())
               }
-            }.toEither
-
-            // Close resources
-            Try(reader.close())
-            Try(response.body().close())
-
-            processEither.left
+            }.toEither.left
               .map(_.toLLMError)
-              .flatMap(_ => accumulator.toCompletion.map(c => c.copy(model = config.model)))
+              .flatMap(_ =>
+                accumulator.toCompletion.map { c =>
+                  val cost = c.usage.flatMap(u => CostEstimator.estimate(config.model, u))
+                  c.copy(model = config.model, estimatedCost = cost)
+                }
+              )
           }
       }
-    }
-  }(
-    extractUsage = _.usage,
-    estimateCost = usage =>
-      org.llm4s.model.ModelRegistry.lookup(config.model).toOption.flatMap { meta =>
-        meta.pricing.estimateCost(usage.promptTokens.toInt, usage.completionTokens.toInt)
-      }
+    },
+    extractUsage = (c: Completion) => c.usage,
+    extractCost = (c: Completion) => c.estimatedCost
   )
 
   override def getContextWindow(): Int = config.contextWindow
@@ -285,12 +287,18 @@ class GeminiClient(
 
   /**
    * Convert a tool to Gemini's function declaration format.
-   * Gemini doesn't accept additionalProperties in schemas, so we strip it out.
+   * Strips OpenAI-specific fields like 'strict' and 'additionalProperties' from the schema
+   * to maintain compatibility with the Gemini API.
    */
-  private def convertToolToGeminiFormat(tool: ToolFunction[_, _]): ujson.Value = {
+  private[provider] def convertToolToGeminiFormat(tool: ToolFunction[_, _]): ujson.Value = {
+    // Generate base JSON schema without strict mode
     val schema = ujson.read(tool.schema.toJsonSchema(false).render())
 
-    // Recursively remove additionalProperties from all objects in the schema
+    // Fix: Explicitly remove OpenAI-only fields to meet Gemini's contract
+    schema.obj.remove("strict")
+    schema.obj.remove("additionalProperties")
+
+    // Recursively remove additionalProperties from all nested objects
     stripAdditionalProperties(schema)
 
     ujson.Obj(
@@ -304,7 +312,7 @@ class GeminiClient(
    * Recursively strip additionalProperties from a JSON schema.
    * Gemini's API doesn't accept this field.
    */
-  private def stripAdditionalProperties(json: ujson.Value): Unit =
+  private[provider] def stripAdditionalProperties(json: ujson.Value): Unit =
     json match {
       case obj: ujson.Obj =>
         // Remove additionalProperties at this level
@@ -372,6 +380,9 @@ class GeminiClient(
           toolCalls = toolCalls
         )
 
+        // Estimate cost using CostEstimator
+        val cost = usageOpt.flatMap(u => CostEstimator.estimate(config.model, u))
+
         Right(
           Completion(
             id = UUID.randomUUID().toString,
@@ -380,7 +391,8 @@ class GeminiClient(
             toolCalls = toolCalls.toList,
             created = System.currentTimeMillis() / 1000,
             message = message,
-            usage = usageOpt
+            usage = usageOpt,
+            estimatedCost = cost
           )
         )
       }
@@ -453,8 +465,10 @@ class GeminiClient(
 
   override def close(): Unit =
     if (closed.compareAndSet(false, true)) {
-      // Java HttpClient does not have explicit close()
-      // We track logical closed state for thread-safety
+      (httpClient: Any) match {
+        case c: AutoCloseable => c.close()
+        case _                => ()
+      }
     }
 
   private def validateNotClosed: Result[Unit] =

@@ -43,8 +43,10 @@ class AnthropicClient(
   override def complete(
     conversation: Conversation,
     options: CompletionOptions
-  ): Result[Completion] = withMetrics("anthropic", config.model) {
-    validateNotClosed.flatMap { _ =>
+  ): Result[Completion] = withMetrics(
+    provider = "anthropic",
+    model = config.model,
+    operation = validateNotClosed.flatMap { _ =>
       // Transform options and messages for model-specific constraints
       TransformationResult.transform(config.model, options, conversation.messages, dropUnsupported = true).flatMap {
         transformed =>
@@ -92,13 +94,9 @@ class AnthropicClient(
           }
           attempt.map(convertFromAnthropicResponse) // Convert response to our model
       }
-    }
-  }(
-    extractUsage = _.usage,
-    estimateCost = usage =>
-      org.llm4s.model.ModelRegistry.lookup(config.model).toOption.flatMap { meta =>
-        meta.pricing.estimateCost(usage.promptTokens, usage.completionTokens)
-      }
+    },
+    extractUsage = (c: Completion) => c.usage,
+    extractCost = (c: Completion) => c.estimatedCost
   )
 
   /*
@@ -129,171 +127,176 @@ curl https://api.anthropic.com/v1/messages \
     conversation: Conversation,
     options: CompletionOptions = CompletionOptions(),
     onChunk: StreamedChunk => Unit
-  ): Result[Completion] = withMetrics("anthropic", config.model) {
-    validateNotClosed.flatMap { _ =>
-      // Transform options and messages for model-specific constraints
-      TransformationResult.transform(config.model, options, conversation.messages, dropUnsupported = true).flatMap {
-        transformed =>
-          val transformedConversation = conversation.copy(messages = transformed.messages)
+  ): Result[Completion] = withMetrics(
+    provider = "anthropic",
+    model = config.model,
+    operation = {
+      validateNotClosed.flatMap { _ =>
+        // Transform options and messages for model-specific constraints
+        TransformationResult.transform(config.model, options, conversation.messages, dropUnsupported = true).flatMap {
+          transformed =>
+            val transformedConversation = conversation.copy(messages = transformed.messages)
 
-          // Build parameters
-          val paramsBuilder = MessageCreateParams
-            .builder()
-            .model(config.model)
-            .temperature(transformed.options.temperature.floatValue())
-            .topP(transformed.options.topP.floatValue())
+            // Build parameters
+            val paramsBuilder = MessageCreateParams
+              .builder()
+              .model(config.model)
+              .temperature(transformed.options.temperature.floatValue())
+              .topP(transformed.options.topP.floatValue())
 
-          // Add max tokens if specified (required by the API)
-          val maxTokens = transformed.options.maxTokens.getOrElse(2048)
-          paramsBuilder.maxTokens(maxTokens)
+            // Add max tokens if specified (required by the API)
+            val maxTokens = transformed.options.maxTokens.getOrElse(2048)
+            paramsBuilder.maxTokens(maxTokens)
 
-          // Add extended thinking configuration if requested
-          transformed.options.effectiveBudgetTokens.foreach { budgetTokens =>
-            val effectiveBudget = math.max(1024, math.min(budgetTokens, maxTokens - 1))
-            paramsBuilder.thinking(
-              ThinkingConfigEnabled.builder().budgetTokens(effectiveBudget.toLong).build()
-            )
-          }
+            // Add extended thinking configuration if requested
+            transformed.options.effectiveBudgetTokens.foreach { budgetTokens =>
+              val effectiveBudget = math.max(1024, math.min(budgetTokens, maxTokens - 1))
+              paramsBuilder.thinking(
+                ThinkingConfigEnabled.builder().budgetTokens(effectiveBudget.toLong).build()
+              )
+            }
 
-          // Add tools if specified
-          if (transformed.options.tools.nonEmpty)
-            transformed.options.tools.foreach(t => paramsBuilder.addTool(convertToolToAnthropicTool(t)))
-          // Add messages from conversation
-          addMessagesToParams(transformedConversation, paramsBuilder)
-          // Build the parameters
-          val messageParams = paramsBuilder.build()
+            // Add tools if specified
+            if (transformed.options.tools.nonEmpty)
+              transformed.options.tools.foreach(t => paramsBuilder.addTool(convertToolToAnthropicTool(t)))
+            // Add messages from conversation
+            addMessagesToParams(transformedConversation, paramsBuilder)
+            // Build the parameters
+            val messageParams = paramsBuilder.build()
 
-          // Create accumulator for building the final completion
-          val accumulator                      = StreamingAccumulator.create()
-          var currentMessageId: Option[String] = None
+            // Create accumulator for building the final completion
+            val accumulator                      = StreamingAccumulator.create()
+            var currentMessageId: Option[String] = None
 
-          // Process the stream
-          val attempt = Try {
-            val messageService = client.messages()
-            val streamResponse = messageService.createStreaming(messageParams)
+            // Process the stream
+            val attempt = Try {
+              val messageService = client.messages()
+              val streamResponse = messageService.createStreaming(messageParams)
 
-            import scala.jdk.StreamConverters._
-            import scala.jdk.OptionConverters._
-            val stream: Iterator[RawMessageStreamEvent] = streamResponse.stream().toScala(Iterator)
-            val loopTry = Try {
-              stream.foreach { event =>
-                // Process different event types using the event's accessor methods
-                // Check for message start event
-                val messageStartOpt = event.messageStart()
-                if (messageStartOpt != null && messageStartOpt.isPresent) {
-                  val msgStart = messageStartOpt.get()
-                  currentMessageId = Some(msgStart.message().id())
-                }
+              import scala.jdk.StreamConverters._
+              import scala.jdk.OptionConverters._
+              val stream: Iterator[RawMessageStreamEvent] = streamResponse.stream().toScala(Iterator)
+              val loopTry = Try {
+                stream.foreach { event =>
+                  // Process different event types using the event's accessor methods
+                  // Check for message start event
+                  val messageStartOpt = event.messageStart()
+                  if (messageStartOpt != null && messageStartOpt.isPresent) {
+                    val msgStart = messageStartOpt.get()
+                    currentMessageId = Some(msgStart.message().id())
+                  }
 
-                // Check for content block delta event
-                val contentDeltaOpt = event.contentBlockDelta()
-                if (contentDeltaOpt != null && contentDeltaOpt.isPresent) {
-                  val contentDelta = contentDeltaOpt.get()
-                  val delta        = contentDelta.delta()
+                  // Check for content block delta event
+                  val contentDeltaOpt = event.contentBlockDelta()
+                  if (contentDeltaOpt != null && contentDeltaOpt.isPresent) {
+                    val contentDelta = contentDeltaOpt.get()
+                    val delta        = contentDelta.delta()
 
-                  // Handle text content delta
-                  Try(delta.text()).foreach { textOpt =>
-                    if (textOpt != null && textOpt.isPresent) {
-                      val textDelta = textOpt.get()
-                      val text      = textDelta.text()
-                      if (text != null && text.nonEmpty) {
-                        val chunk = StreamedChunk(
-                          id = currentMessageId.getOrElse(""),
-                          content = Some(text),
-                          toolCall = None,
-                          finishReason = None
-                        )
-                        accumulator.addChunk(chunk)
-                        onChunk(chunk)
+                    // Handle text content delta
+                    Try(delta.text()).foreach { textOpt =>
+                      if (textOpt != null && textOpt.isPresent) {
+                        val textDelta = textOpt.get()
+                        val text      = textDelta.text()
+                        if (text != null && text.nonEmpty) {
+                          val chunk = StreamedChunk(
+                            id = currentMessageId.getOrElse(""),
+                            content = Some(text),
+                            toolCall = None,
+                            finishReason = None
+                          )
+                          accumulator.addChunk(chunk)
+                          onChunk(chunk)
+                        }
+                      }
+                    }
+
+                    // Handle thinking content delta
+                    Try(delta.thinking()).foreach { thinkingOpt =>
+                      if (thinkingOpt != null && thinkingOpt.isPresent) {
+                        val thinkingDelta = thinkingOpt.get()
+                        val thinkingText  = thinkingDelta.thinking()
+                        if (thinkingText != null && thinkingText.nonEmpty) {
+                          val chunk = StreamedChunk(
+                            id = currentMessageId.getOrElse(""),
+                            content = None,
+                            toolCall = None,
+                            finishReason = None,
+                            thinkingDelta = Some(thinkingText)
+                          )
+                          accumulator.addChunk(chunk)
+                          onChunk(chunk)
+                        }
                       }
                     }
                   }
 
-                  // Handle thinking content delta
-                  Try(delta.thinking()).foreach { thinkingOpt =>
-                    if (thinkingOpt != null && thinkingOpt.isPresent) {
-                      val thinkingDelta = thinkingOpt.get()
-                      val thinkingText  = thinkingDelta.thinking()
-                      if (thinkingText != null && thinkingText.nonEmpty) {
-                        val chunk = StreamedChunk(
-                          id = currentMessageId.getOrElse(""),
-                          content = None,
-                          toolCall = None,
-                          finishReason = None,
-                          thinkingDelta = Some(thinkingText)
-                        )
-                        accumulator.addChunk(chunk)
-                        onChunk(chunk)
-                      }
+                  val contentStartOpt = event.contentBlockStart()
+                  if (contentStartOpt != null && contentStartOpt.isPresent) {
+                    val contentStart = contentStartOpt.get()
+                    val block        = contentStart.contentBlock()
+                    if (block.isToolUse) {
+                      val toolUse = block.asToolUse()
+                      val chunk = StreamedChunk(
+                        id = currentMessageId.getOrElse(""),
+                        content = None,
+                        toolCall = Some(ToolCall(id = toolUse.id(), name = toolUse.name(), arguments = ujson.Obj())),
+                        finishReason = None
+                      )
+                      accumulator.addChunk(chunk)
+                      onChunk(chunk)
                     }
                   }
-                }
 
-                val contentStartOpt = event.contentBlockStart()
-                if (contentStartOpt != null && contentStartOpt.isPresent) {
-                  val contentStart = contentStartOpt.get()
-                  val block        = contentStart.contentBlock()
-                  if (block.isToolUse) {
-                    val toolUse = block.asToolUse()
+                  val messageStopOpt = event.messageStop()
+                  if (messageStopOpt != null && messageStopOpt.isPresent) {
                     val chunk = StreamedChunk(
                       id = currentMessageId.getOrElse(""),
                       content = None,
-                      toolCall = Some(ToolCall(id = toolUse.id(), name = toolUse.name(), arguments = ujson.Null)),
-                      finishReason = None
+                      toolCall = None,
+                      finishReason = Some("stop")
                     )
                     accumulator.addChunk(chunk)
                     onChunk(chunk)
                   }
-                }
 
-                val messageStopOpt = event.messageStop()
-                if (messageStopOpt != null && messageStopOpt.isPresent) {
-                  val chunk = StreamedChunk(
-                    id = currentMessageId.getOrElse(""),
-                    content = None,
-                    toolCall = None,
-                    finishReason = Some("stop")
-                  )
-                  accumulator.addChunk(chunk)
-                  onChunk(chunk)
-                }
-
-                val messageDeltaOpt = event.messageDelta()
-                if (messageDeltaOpt != null && messageDeltaOpt.isPresent) {
-                  val msgDelta = messageDeltaOpt.get()
-                  Try(msgDelta.usage()).foreach { usage =>
-                    if (usage != null) {
-                      val inputTokens = Option(usage.inputTokens()) match {
-                        case Some(opt: Optional[_]) => opt.toScala.map(_.toInt).getOrElse(0)
-                        case _                      => 0
+                  val messageDeltaOpt = event.messageDelta()
+                  if (messageDeltaOpt != null && messageDeltaOpt.isPresent) {
+                    val msgDelta = messageDeltaOpt.get()
+                    Try(msgDelta.usage()).foreach { usage =>
+                      if (usage != null) {
+                        val inputTokens = Option(usage.inputTokens()) match {
+                          case Some(opt: Optional[_]) => opt.toScala.map(_.toInt).getOrElse(0)
+                          case _                      => 0
+                        }
+                        val outputTokens = Option(usage.outputTokens()).map(_.toInt).getOrElse(0)
+                        if (inputTokens > 0 || outputTokens > 0) accumulator.updateTokens(inputTokens, outputTokens)
                       }
-                      val outputTokens = Option(usage.outputTokens()).map(_.toInt).getOrElse(0)
-                      if (inputTokens > 0 || outputTokens > 0) accumulator.updateTokens(inputTokens, outputTokens)
                     }
                   }
                 }
               }
-            }
-            Try(streamResponse.close());
-            loopTry.get
-          }.toEither.left
-            .map {
-              case e: com.anthropic.errors.UnauthorizedException => AuthenticationError("anthropic", e.getMessage)
-              case _: com.anthropic.errors.RateLimitException    => RateLimitError("anthropic")
-              case e: com.anthropic.errors.AnthropicInvalidDataException => ValidationError("input", e.getMessage)
-              case e: Exception                                          => e.toLLMError
-            }
+              Try(streamResponse.close());
+              loopTry.get
+            }.toEither.left
+              .map {
+                case e: com.anthropic.errors.UnauthorizedException => AuthenticationError("anthropic", e.getMessage)
+                case _: com.anthropic.errors.RateLimitException    => RateLimitError("anthropic")
+                case e: com.anthropic.errors.AnthropicInvalidDataException => ValidationError("input", e.getMessage)
+                case e: Exception                                          => e.toLLMError
+              }
 
-          // Return the accumulated completion
-          attempt.flatMap(_ => accumulator.toCompletion.map(c => c.copy(model = config.model)))
+            // Return the accumulated completion
+            attempt.flatMap(_ =>
+              accumulator.toCompletion.map { c =>
+                val cost = c.usage.flatMap(u => CostEstimator.estimate(config.model, u))
+                c.copy(model = config.model, estimatedCost = cost)
+              }
+            )
+        }
       }
-    }
-  }(
-    extractUsage = _.usage,
-    estimateCost = usage =>
-      org.llm4s.model.ModelRegistry.lookup(config.model).toOption.flatMap { meta =>
-        meta.pricing.estimateCost(usage.promptTokens, usage.completionTokens)
-      }
+    },
+    extractUsage = (c: Completion) => c.usage,
+    extractCost = (c: Completion) => c.estimatedCost
   )
 
   override def getContextWindow(): Int = providerConfig.contextWindow
@@ -338,26 +341,34 @@ curl https://api.anthropic.com/v1/messages \
     }
   }
 
-  // Convert our ToolFunction to Anthropic's Tool
-  private def convertToolToAnthropicTool(toolFunction: ToolFunction[_, _]): Tool = {
-    // note: in case of debug set this environment variable -- `ANTHROPIC_LOG=debug`
-
-    val objectSchema  = toolFunction.schema.asInstanceOf[ObjectSchema[_]]
+  /**
+   * Convert a ToolFunction to Anthropic's Tool format.
+   * Strips OpenAI-specific fields like 'strict' and 'additionalProperties' from the schema
+   * to maintain compatibility with the Anthropic API.
+   */
+  private[provider] def convertToolToAnthropicTool(toolFunction: ToolFunction[_, _]): Tool = {
+    val objectSchema = toolFunction.schema.asInstanceOf[ObjectSchema[_]]
+    // Generate raw schema without 'strict' mode
     val jsonSchemaStr = objectSchema.toJsonSchema(false).render()
 
-    // Parse the JSON schema and extract properties
+    // Parse the JSON and sanitize the schema
+    val jsonNode = ujson.read(jsonSchemaStr)
+
+    // Fix: Remove OpenAI-only top-level fields
+    jsonNode.obj.remove("strict")
+    jsonNode.obj.remove("additionalProperties")
+
+    // Recursively strip additionalProperties from nested parts
+    stripAdditionalProperties(jsonNode)
+
+    val sanitizedSchemaStr = jsonNode.render()
     val jsonSchema: JsonObject =
-      ObjectMappers.jsonMapper().readValue(jsonSchemaStr, classOf[JsonObject])
+      ObjectMappers.jsonMapper().readValue(sanitizedSchemaStr, classOf[JsonObject])
     val jsonSchemaMap = jsonSchema.values()
 
-    // Build the input schema using raw JSON value for properties
-    // The new SDK requires proper Properties type, so we use the putAdditionalProperty approach
     val inputSchemaBuilder = Tool.InputSchema.builder()
-
-    // Convert the properties JsonValue to Properties type
-    val propertiesValue = jsonSchemaMap.get("properties")
+    val propertiesValue    = jsonSchemaMap.get("properties")
     if (propertiesValue != null) {
-      // Use the properties via JsonValue wrapper
       val propertiesObj = ObjectMappers
         .jsonMapper()
         .readValue(
@@ -367,14 +378,29 @@ curl https://api.anthropic.com/v1/messages \
       inputSchemaBuilder.properties(propertiesObj)
     }
 
-    val tool = Tool
+    Tool
       .builder()
       .name(toolFunction.name)
       .description(toolFunction.description)
       .inputSchema(inputSchemaBuilder.build().validate())
       .build()
-    tool
   }
+
+  /**
+   * Recursively strip 'additionalProperties' from all levels of a JSON schema.
+   * This ensures compatibility with providers that don't support OpenAI-specific schema extensions.
+   */
+  private[provider] def stripAdditionalProperties(json: ujson.Value): Unit =
+    json match {
+      case obj: ujson.Obj =>
+        obj.value.remove("additionalProperties")
+        obj.value.get("properties").foreach(props => props.obj.values.foreach(stripAdditionalProperties))
+        obj.value.get("items").foreach(stripAdditionalProperties)
+        Seq("anyOf", "oneOf", "allOf").foreach { key =>
+          obj.value.get(key).foreach(arr => arr.arr.foreach(stripAdditionalProperties))
+        }
+      case _ =>
+    }
 
   // Convert Anthropic response to our model
   private def convertFromAnthropicResponse(response: Message): Completion = {
@@ -408,6 +434,9 @@ curl https://api.anthropic.com/v1/messages \
     // Note: The SDK may expose thinking tokens differently - adjust as needed
     val tokenUsage = baseTokenUsage
 
+    // Estimate cost using CostEstimator
+    val cost = CostEstimator.estimate(config.model, tokenUsage)
+
     // Create completion
     Completion(
       id = response.id(),
@@ -417,7 +446,8 @@ curl https://api.anthropic.com/v1/messages \
       created = System.currentTimeMillis() / 1000, // Use current time as created timestamp
       message = message,
       usage = Some(tokenUsage),
-      thinking = thinkingContent
+      thinking = thinkingContent,
+      estimatedCost = cost
     )
   }
 
@@ -442,8 +472,7 @@ curl https://api.anthropic.com/v1/messages \
 
   override def close(): Unit =
     if (closed.compareAndSet(false, true)) {
-      // The Anthropic OkHttpClient does not expose a close() method.
-      // We track logical closed state for thread-safety.
+      client.close()
     }
 
   private def validateNotClosed: Result[Unit] =
