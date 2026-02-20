@@ -10,8 +10,6 @@ import org.llm4s.trace.{ ConsoleTracing, Tracing }
 import org.slf4j.LoggerFactory
 
 import scala.concurrent.duration._
-import scala.util.boundary
-import scala.util.boundary.break
 
 /**
  * Sample demonstrating semantic LLM response caching.
@@ -26,17 +24,16 @@ import scala.util.boundary.break
  *
  * Run with: sbt "samples/runMain org.llm4s.samples.cache.SemanticCachingSample"
  */
-object SemanticCachingSample {
+object SemanticCachingSample extends App {
   private val logger = LoggerFactory.getLogger(getClass)
-  private def env(key: String): Option[String] =
-    sys.props.get(key).orElse(sys.env.get(key))
-  def main(args: Array[String]): Unit = boundary {
 
-    val apiKey = env("OPENAI_API_KEY") match {
+  def runDemo(): Unit = {
+    // Check for API key
+    val apiKey = sys.env.get("OPENAI_API_KEY") match {
       case Some(key) => key
       case None =>
         logger.error("OPENAI_API_KEY environment variable not set")
-        break(())
+        return
     }
 
     println("=== Semantic Caching Demo ===\n")
@@ -51,14 +48,12 @@ object SemanticCachingSample {
       organization = None,
       baseUrl = "https://api.openai.com"
     )
-    val baseLLMClient: LLMClient =
-      OpenAIClient(openAIConfig).fold(
-        err => {
-          logger.error("Error creating OpenAI client: {}", err.message)
-          break(())
-        },
-        identity
-      )
+    val baseLLMClient: LLMClient = OpenAIClient(openAIConfig) match {
+      case Right(client) => client
+      case Left(err) =>
+        logger.error(s"Failed to initialize OpenAI client: ${err.message}")
+        return
+    }
 
     // Create embedding client for semantic similarity
     val embeddingConfig = EmbeddingProviderConfig(
@@ -66,16 +61,12 @@ object SemanticCachingSample {
       model = "text-embedding-3-small",
       apiKey = apiKey
     )
-    val embeddingClient =
-      EmbeddingClient
-        .from("openai", embeddingConfig)
-        .fold(
-          err => {
-            logger.error("Error creating Embedding client: {}", err.message)
-            break(())
-          },
-          identity
-        )
+    val embeddingClient = EmbeddingClient.from("openai", embeddingConfig) match {
+      case Right(client) => client
+      case Left(err) =>
+        logger.error(s"Failed to initialize embedding client: ${err.message}")
+        return
+    }
     val embeddingModel = EmbeddingModelConfig("text-embedding-3-small", 1536)
 
     // Configure cache: 95% similarity threshold, 5 minute TTL, max 100 entries
@@ -84,14 +75,12 @@ object SemanticCachingSample {
         similarityThreshold = 0.95,
         ttl = 5.minutes,
         maxSize = 100
-      )
-      .fold(
-        err => {
-          logger.error("Cache config error: {}", err.message)
-          break(())
-        },
-        identity
-      )
+      ) match {
+        case Right(config) => config
+        case Left(err) =>
+          logger.error(s"Failed to create cache config: ${err.message}")
+          return
+      }
 
     // Wrap base client with caching
     val cachingClient = new CachingLLMClient(
@@ -110,9 +99,11 @@ object SemanticCachingSample {
     // Demo 1: Cache miss then hit
     println("--- Demo 1: Identical queries (should hit cache) ---")
     val query1 = "What is the capital of France?"
-    val conv1 = Conversation.userOnly(query1).getOrElse {
-      logger.error("Failed to create conversation")
-      break(())
+    val conv1 = Conversation.userOnly(query1) match {
+      case Right(conv) => conv
+      case Left(err) =>
+        logger.error(s"Failed to create conversation: ${err.message}")
+        return
     }
 
     println(s"Query 1: $query1")
@@ -130,9 +121,11 @@ object SemanticCachingSample {
     // Demo 2: Similar query (should hit cache if similarity > threshold)
     println("--- Demo 2: Similar query ---")
     val query2 = "Tell me the capital city of France"
-    val conv2 = Conversation.userOnly(query2).getOrElse {
-      logger.error("Failed to create conversation")
-      break(())
+    val conv2 = Conversation.userOnly(query2) match {
+      case Right(conv) => conv
+      case Left(err) =>
+        logger.error(s"Failed to create conversation: ${err.message}")
+        return
     }
 
     println(s"Query 3 (similar): $query2")
@@ -144,9 +137,11 @@ object SemanticCachingSample {
     // Demo 3: Different query (should miss cache)
     println("--- Demo 3: Different query (should miss cache) ---")
     val query3 = "What is the capital of Germany?"
-    val conv3 = Conversation.userOnly(query3).getOrElse {
-      logger.error("Failed to create conversation")
-      break(())
+    val conv3 = Conversation.userOnly(query3) match {
+      case Right(conv) => conv
+      case Left(err) =>
+        logger.error(s"Failed to create conversation: ${err.message}")
+        return
     }
 
     println(s"Query 4 (different): $query3")
@@ -174,4 +169,6 @@ object SemanticCachingSample {
     // Cleanup
     cachingClient.close()
   }
+
+  runDemo()
 }

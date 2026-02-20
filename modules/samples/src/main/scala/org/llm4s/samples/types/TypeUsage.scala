@@ -5,8 +5,6 @@ import org.llm4s.types._
 import org.slf4j.LoggerFactory
 
 import scala.concurrent.Future
-import scala.util.boundary
-import scala.util.boundary.break
 
 /**
  * Example usage of the types defined in this package.
@@ -20,12 +18,14 @@ object TypeUsage {
   private val logger = LoggerFactory.getLogger(getClass)
 
   // Example: Using type-safe IDs
-  def exampleTypeSafeIds(): Unit = boundary {
+  def exampleTypeSafeIds(): Unit = {
     val modelName = ModelName.GPT_4
     val provider  = ProviderName.OPENAI
-    val apiKey = ApiKey("sk-test123").getOrElse {
-      logger.error("Invalid API key")
-      break(())
+    val apiKey = ApiKey("sk-test123") match {
+      case Right(k) => k
+      case Left(_) =>
+        logger.error("Invalid API key")
+        return
     }
 
     logger.info("Using model {} from provider {}", modelName, provider)
