@@ -4,6 +4,7 @@ import org.llm4s.llmconnect.LLMConnect
 import org.llm4s.llmconnect.model._
 import org.llm4s.toolapi._
 import org.llm4s.toolapi.tools.WeatherTool
+import org.slf4j.LoggerFactory
 
 /**
  * Test example for Google Gemini provider.
@@ -16,6 +17,7 @@ import org.llm4s.toolapi.tools.WeatherTool
  */
 
 object GeminiTestExample {
+  private val logger = LoggerFactory.getLogger(getClass)
 
   def main(args: Array[String]): Unit = {
 
@@ -23,22 +25,22 @@ object GeminiTestExample {
       providerCfg <- org.llm4s.config.Llm4sConfig.provider()
       client      <- LLMConnect.getClient(providerCfg)
       _ = {
-        println("=" * 60)
-        println("Gemini Provider Test Suite")
-        println("=" * 60)
+        logger.info("=" * 60)
+        logger.info("Gemini Provider Test Suite")
+        logger.info("=" * 60)
 
         testSimpleCompletion(client)
         testStreaming(client)
         testToolCalling(client)
 
-        println("=" * 60)
-        println("All tests complete!")
-        println("=" * 60)
+        logger.info("=" * 60)
+        logger.info("All tests complete!")
+        logger.info("=" * 60)
       }
     } yield ()
 
     result.fold(
-      err => println(s"Configuration error: ${err.formatted}"),
+      err => logger.error(s"Configuration error: ${err.formatted}"),
       identity
     )
   }
@@ -54,15 +56,15 @@ object GeminiTestExample {
 
     client.complete(conversation) match {
       case Right(completion) =>
-        println(" Simple completion SUCCESS")
-        println(s"   Model: ${completion.model}")
-        println(s"   Response: ${completion.message.content.take(100)}")
+        logger.info(" Simple completion SUCCESS")
+        logger.info(s"   Model: ${completion.model}")
+        logger.info(s"   Response: ${completion.message.content.take(100)}")
         completion.usage.foreach { u =>
-          println(s"   Tokens: ${u.totalTokens} (${u.promptTokens} prompt + ${u.completionTokens} completion)")
+          logger.info(s"   Tokens: ${u.totalTokens} (${u.promptTokens} prompt + ${u.completionTokens} completion)")
         }
 
       case Left(error) =>
-        println(s" Simple completion FAILED: ${error.formatted}")
+        logger.error(s" Simple completion FAILED: ${error.formatted}")
     }
   }
 
@@ -94,13 +96,13 @@ object GeminiTestExample {
 
     result match {
       case Right(completion) =>
-        println("\n Streaming SUCCESS")
-        println(s"   Chunks received: $chunkCount")
-        println(s"   Total content length: ${fullContent.length}")
-        println(s"   Content matches completion: ${completion.message.content == fullContent.toString()}")
+        logger.info("\n Streaming SUCCESS")
+        logger.info(s"   Chunks received: $chunkCount")
+        logger.info(s"   Total content length: ${fullContent.length}")
+        logger.info(s"   Content matches completion: ${completion.message.content == fullContent.toString()}")
 
       case Left(error) =>
-        println(s" Streaming FAILED: ${error.formatted}")
+        logger.error(s" Streaming FAILED: ${error.formatted}")
     }
   }
 
@@ -122,7 +124,7 @@ object GeminiTestExample {
       case Right(completion) =>
         if (completion.message.toolCalls.nonEmpty) {
 
-          println(" Tool calling detected")
+          logger.info(" Tool calling detected")
 
           completion.message.toolCalls.foreach { tc =>
 
@@ -136,20 +138,20 @@ object GeminiTestExample {
 
             client.complete(updatedConversation, CompletionOptions()) match {
               case Right(finalCompletion) =>
-                println(s"   Final response: ${finalCompletion.message.content.take(200)}")
+                logger.info(s"   Final response: ${finalCompletion.message.content.take(200)}")
 
               case Left(error) =>
-                println(s"   Final response failed: ${error.formatted}")
+                logger.error(s"   Final response failed: ${error.formatted}")
             }
           }
 
         } else {
-          println(" No tool calls in response")
-          println(s"   Response: ${completion.message.content.take(200)}")
+          logger.info(" No tool calls in response")
+          logger.info(s"   Response: ${completion.message.content.take(200)}")
         }
 
       case Left(error) =>
-        println(s" Tool calling FAILED: ${error.formatted}")
+        logger.error(s" Tool calling FAILED: ${error.formatted}")
     }
   }
 }
