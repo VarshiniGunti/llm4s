@@ -76,11 +76,11 @@ object SemanticCachingSample extends App {
         ttl = 5.minutes,
         maxSize = 100
       ) match {
-        case Right(config) => config
-        case Left(err) =>
-          logger.error(s"Failed to create cache config: ${err.message}")
-          return
-      }
+      case Right(config) => config
+      case Left(err) =>
+        logger.error(s"Failed to create cache config: ${err.message}")
+        return
+    }
 
     // Wrap base client with caching
     val cachingClient = new CachingLLMClient(
