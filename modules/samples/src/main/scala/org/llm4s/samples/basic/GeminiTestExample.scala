@@ -106,7 +106,7 @@ object GeminiTestExample {
     }
   }
 
-  private def testToolCalling(config: GeminiConfig): Unit =
+  private def testToolCalling(client: org.llm4s.llmconnect.LLMClient): Unit =
     WeatherTool.toolSafe match {
       case Left(err) => println(s"Failed to load weather tool: ${err.formatted}")
       case Right(weatherTool) =>
@@ -121,13 +121,8 @@ object GeminiTestExample {
         )
         val options = CompletionOptions(tools = Seq(weatherTool))
 
-        val result = for {
-          client     <- LLMConnect.getClient(config)
-          completion <- client.complete(conversation, options)
-        } yield (client, completion)
-
-        result match {
-          case Right((client, completion)) =>
+        client.complete(conversation, options) match {
+          case Right(completion) =>
             if (completion.toolCalls.nonEmpty) {
               println(s"✅ Tool calling detected")
               completion.toolCalls.foreach { tc =>

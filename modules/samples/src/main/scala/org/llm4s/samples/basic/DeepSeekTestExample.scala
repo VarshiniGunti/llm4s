@@ -112,7 +112,7 @@ object DeepSeekTestExample {
     }
   }
 
-  private def testToolCalling(config: DeepSeekConfig): Unit =
+  private def testToolCalling(client: org.llm4s.llmconnect.LLMClient): Unit =
     WeatherTool.toolSafe match {
       case Left(err) => logger.error(s"Failed to load weather tool: ${err.formatted}")
       case Right(weatherTool) =>
@@ -127,13 +127,8 @@ object DeepSeekTestExample {
         )
         val options = CompletionOptions(tools = Seq(weatherTool))
 
-        val result = for {
-          client     <- LLMConnect.getClient(config)
-          completion <- client.complete(conversation, options)
-        } yield (client, completion)
-
-        result match {
-          case Right((client, completion)) =>
+        client.complete(conversation, options) match {
+          case Right(completion) =>
             if (completion.toolCalls.nonEmpty) {
               logger.info("Tool calling detected")
               completion.toolCalls.foreach { tc =>

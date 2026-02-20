@@ -14,9 +14,6 @@ parent: Reference
 {: .note }
 > **New contributor?** Start with the [Contributing Guide](contributing) for the step-by-step process of submitting your first PR. This page covers coding standards and patterns.
 
-{: .note }
-> **New contributor?** Start with the [Contributing Guide](contributing) for the step-by-step process of submitting your first PR. This page covers coding standards and patterns.
-
 This document captures coding best practices derived from PR review feedback, particularly from experienced contributors. Following these guidelines will help your PRs pass review faster.
 
 ---
