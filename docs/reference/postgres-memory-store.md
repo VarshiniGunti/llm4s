@@ -186,7 +186,7 @@ This section shows how a developer would use `PostgresMemoryStore` in a real app
 
 ```scala
 import java.time.Instant
-import org.llm4s.agent.memory.{PostgresMemoryStore, Memory, MemoryFilter, MemoryId}
+import org.llm4s.agent.memory.{PostgresMemoryStore, Memory, MemoryFilter, MemoryId, MemoryType}
 
 val config = PostgresMemoryStore.Config(
   host = "localhost",
@@ -200,11 +200,11 @@ val config = PostgresMemoryStore.Config(
 val memory = Memory(
   id = MemoryId("memory-1"),
   content = "Scala enables reliable AI systems",
-  memoryType = "knowledge",
+  memoryType = MemoryType.Knowledge,
   metadata = Map("topic" -> "scala"),
-  createdAt = Instant.now(),
-  importance = 0.8,
-  embedding = Some(embeddingVector) // must match configured dimension
+  timestamp = Instant.now(),
+  importance = Some(0.8),
+  embedding = None
 )
 
 val result = for {
@@ -212,8 +212,9 @@ val result = for {
   store2  <- store.store(memory)
   results <- store2.recall(MemoryFilter.ByMetadata("topic", "scala"), limit = 5)
   store3  <- store2.update(MemoryId("memory-1"), m => m.copy(content = "Updated memory content"))
-  store4  <- store3.delete(MemoryId("memory-1"))
+  _       <- store3.delete(MemoryId("memory-1"))
 } yield results
+```
 
 ---
 
