@@ -79,16 +79,18 @@ class WorkspaceAgentInterfaceImpl(
   private def isExcluded(path: String, excludePatterns: List[String]): Boolean =
     // Simple glob matching implementation
     // In a real implementation, use a proper glob library
+    val normalizedPath = path.replace("\\", "/")
     excludePatterns.exists { pattern =>
+      val normalizedPattern = pattern.replace("\\", "/")
       // Use a placeholder to avoid corrupting ** when replacing *
       val placeholder = "\u0000DOUBLESTAR\u0000"
-      val regex = pattern
+      val regex = normalizedPattern
         .replace("**", placeholder) // protect ** first
         .replace(".", "\\.")        // escape dots
         .replace("*", "[^/]+")      // single * matches path segment chars
         .replace(placeholder, ".*") // restore ** as .* to match any path
 
-      path.matches(regex)
+      normalizedPath.matches(regex)
     }
 
   /**

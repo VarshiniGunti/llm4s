@@ -122,6 +122,30 @@ class WorkspaceAgentInterfaceImplTest extends AnyFlatSpec with Matchers with org
     response.matches.exists(_.path == "test2.txt") shouldBe true
   }
 
+  it should "exclude default patterns consistently with Windows path separators" in {
+    val projectDir    = tempDir.resolve("project")
+    val gitDir        = projectDir.resolve(".git")
+    val gitConfigFile = gitDir.resolve("config")
+    val targetDir     = projectDir.resolve("target")
+    val classFile     = targetDir.resolve("App.class")
+
+    Files.createDirectories(projectDir)
+    Files.createDirectories(gitDir)
+    Files.createDirectories(targetDir)
+    Files.write(gitConfigFile, "[core]\nrepositoryformatversion = 0".getBytes(StandardCharsets.UTF_8))
+    Files.write(classFile, "bytecode".getBytes(StandardCharsets.UTF_8))
+
+    val response = interface.exploreFiles(
+      ".",
+      recursive = Some(true),
+      excludePatterns = Some(List("**\\.git\\**", "**\\target\\**"))
+    )
+
+    val normalizedPaths = response.files.map(_.path.replace("\\", "/"))
+    normalizedPaths should not contain "project/.git/config"
+    normalizedPaths should not contain "project/target/App.class"
+  }
+
   it should "execute commands" in {
     // This test is platform-dependent, so we'll use a simple command
     val testCommand = if (System.getProperty("os.name").startsWith("Windows")) {
