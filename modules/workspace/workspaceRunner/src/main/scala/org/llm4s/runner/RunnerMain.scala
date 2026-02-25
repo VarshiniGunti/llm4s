@@ -388,7 +388,7 @@ object RunnerMain extends cask.MainRoutes {
               done: Promise[Unit]
             ): Unit =
               Future {
-                val buffer = new Array[Byte](8192)
+                val buffer    = new Array[Byte](8192)
                 var bytesRead = 0
                 var captured  = 0L
 
@@ -530,10 +530,10 @@ object RunnerMain extends cask.MainRoutes {
             }
             // Also clean up processes for timed out connection
             Option(clientProcesses.remove(channel)).foreach { processes =>
-              processes.forEach((_, running) => {
+              processes.forEach { (_, running) =>
                 running.cancelled.set(true)
                 Try(running.process.destroyForcibly())
-              })
+              }
             }
             connections.remove(channel)
           }
