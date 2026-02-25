@@ -76,7 +76,7 @@ class WorkspaceAgentInterfaceImpl(
    * @param excludePatterns Patterns to exclude
    * @return true if the path should be excluded
    */
-  private def isExcluded(path: String, excludePatterns: List[String]): Boolean =
+  private def isExcluded(path: String, excludePatterns: List[String]): Boolean = {
     // Simple glob matching implementation
     // In a real implementation, use a proper glob library
     val normalizedPath = path.replace("\\", "/")
@@ -92,6 +92,7 @@ class WorkspaceAgentInterfaceImpl(
 
       normalizedPath.matches(regex)
     }
+  }
 
   /**
    * List files and directories in a specified path, optionally recursively.
