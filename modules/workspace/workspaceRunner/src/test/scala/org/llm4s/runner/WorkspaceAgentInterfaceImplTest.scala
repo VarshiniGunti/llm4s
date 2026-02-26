@@ -6,6 +6,8 @@ import org.scalatest.matchers.should.Matchers
 
 import java.nio.charset.StandardCharsets
 import java.nio.file.Files
+import scala.jdk.CollectionConverters._
+import scala.util.Using
 
 class WorkspaceAgentInterfaceImplTest extends AnyFlatSpec with Matchers with org.scalatest.BeforeAndAfterAll {
 
@@ -86,27 +88,17 @@ class WorkspaceAgentInterfaceImplTest extends AnyFlatSpec with Matchers with org
     // Verify modification
     val content = new String(Files.readAllBytes(tempDir.resolve("modify-test.txt")), StandardCharsets.UTF_8)
 
-    println("----- DEBUG [TEST]: Content read after modifyFile -----")
-    println(s"```\n${content}\n```") // Print the content clearly delimited
-    println("----- END DEBUG [TEST] -----")
-
     content should include("Modified Line 2")
     content should include("Modified Line 3")
-    // (content should not).include("Line 3")
 
     val lineSep = System.lineSeparator()
-
-// Construct the exact expected string. Note: writer.println adds a newline AFTER EACH line.
     val expectedContent = Seq(
       "Line 1",
       "Modified Line 2",
       "Modified Line 3",
       "Line 5"
-    ).mkString(lineSep) + lineSep // Add the trailing newline added by the last println
-
-// Perform the precise comparison
+    ).mkString(lineSep) + lineSep
     content shouldBe expectedContent
-
   }
 
   it should "search files for content" in {
@@ -150,7 +142,7 @@ class WorkspaceAgentInterfaceImplTest extends AnyFlatSpec with Matchers with org
     // Delete temporary directory recursively
     def deleteRecursively(path: java.nio.file.Path): Unit = {
       if (Files.isDirectory(path)) {
-        Files.list(path).forEach(p => deleteRecursively(p))
+        Using.resource(Files.list(path))(stream => stream.iterator().asScala.foreach(deleteRecursively))
       }
       Files.deleteIfExists(path)
     }
