@@ -150,14 +150,32 @@ object RunnerMain extends cask.MainRoutes {
       case CancelCommandMessage(commandId) =>
         // Handle cancellation - only kill THIS client's process.
         // Completion/response are emitted by the command execution path to avoid double-completed events.
-        Option(clientProcesses.get(channel))
-          .flatMap(processes => Option(processes.get(commandId)))
-          .foreach { running =>
-            running.cancelled.set(true)
-            running.process.destroyForcibly()
-            logger.info(s"Command $commandId cancelled by client")
-          }
+        val runningOpt =
+          Option(clientProcesses.get(channel))
+            .flatMap(processes => Option(processes.get(commandId)))
 
+        runningOpt match {
+          case Some(running) =>
+            running.cancelled.set(true)
+            val process = running.process
+            val terminationAttempt = Try {
+              val destroyedProcess = process.destroyForcibly()
+              // Wait briefly for the process to actually terminate
+              if (!destroyedProcess.waitFor(5, TimeUnit.SECONDS)) {
+                logger.warn(s"Process for command $commandId did not terminate within timeout after cancellation")
+              }
+            }
+            terminationAttempt.failed.foreach { ex =>
+              logger.error(s"Error destroying process for command $commandId: ${ex.getMessage}", ex)
+            }
+            logger.info(s"Command $commandId cancelled by client")
+            // Inform the client that the cancellation request was processed
+            sendError(channel, s"Command $commandId cancelled", "COMMAND_CANCELLED")
+
+          case None =>
+            logger.warn(s"Cancellation requested for unknown or non-running command id $commandId")
+            sendError(channel, s"No running command found for id $commandId", "UNKNOWN_COMMAND_ID")
+        }
       case HeartbeatMessage(timestamp) =>
         logger.debug(s"Received heartbeat at timestamp $timestamp")
         sendMessage(channel, HeartbeatResponseMessage(System.currentTimeMillis()))
@@ -434,7 +452,21 @@ object RunnerMain extends cask.MainRoutes {
                         -1
                       } else process.exitValue()
                     case None =>
-                      process.waitFor()
+                      // Poll for process completion so we can react promptly to cancellation.
+                      var finished = false
+                      // Use a short timeout to periodically check the cancelled flag.
+                      while (!finished && !running.cancelled.get()) {
+                        finished = process.waitFor(500, TimeUnit.MILLISECONDS)
+                      }
+                      if (running.cancelled.get()) {
+                        // Ensure the process is not left running after cancellation.
+                        process.destroyForcibly()
+                        -1
+                      } else if (finished) {
+                        process.exitValue()
+                      } else {
+                        -1
+                      }
                   }
                 catch {
                   case _: InterruptedException =>
