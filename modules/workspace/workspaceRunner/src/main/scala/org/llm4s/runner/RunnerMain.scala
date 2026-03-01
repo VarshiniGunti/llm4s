@@ -5,7 +5,7 @@ import org.slf4j.LoggerFactory
 import upickle.default._
 
 import java.nio.charset.StandardCharsets
-import java.nio.file.{ Files, Path, Paths }
+import java.nio.file.{ Files, Paths }
 import java.util.concurrent.atomic.{ AtomicBoolean, AtomicLong }
 import java.util.concurrent.{ ConcurrentHashMap, Executors, ScheduledExecutorService, TimeUnit }
 import scala.concurrent.{ ExecutionContext, Future, Promise }
@@ -86,7 +86,9 @@ object RunnerMain extends cask.MainRoutes {
 
   private case class RunningCommand(
     process: Process,
-    cancelled: AtomicBoolean
+    cancelled: AtomicBoolean,
+    startTimeMs: Long,
+    completionSent: AtomicBoolean
   )
 
   // Default host binding - 0.0.0.0 to be accessible from outside container
@@ -117,7 +119,13 @@ object RunnerMain extends cask.MainRoutes {
           Option(clientProcesses.remove(channel)).foreach { processes =>
             processes.forEach { (_, running) =>
               running.cancelled.set(true)
-              Try(running.process.destroyForcibly()).failed.foreach { ex =>
+              val terminateAttempt = Try {
+                val destroyedProcess = running.process.destroyForcibly()
+                if (!destroyedProcess.waitFor(5, TimeUnit.SECONDS)) {
+                  logger.warn("Process did not terminate within timeout after disconnect")
+                }
+              }
+              terminateAttempt.failed.foreach { ex =>
                 logger.error(s"Error destroying process on disconnect: ${ex.getMessage}", ex)
               }
             }
@@ -151,7 +159,7 @@ object RunnerMain extends cask.MainRoutes {
 
       case CancelCommandMessage(commandId) =>
         // Handle cancellation - only kill THIS client's process.
-        // Completion/response are emitted by the command execution path to avoid double-completed events.
+        // Cancellation is acknowledged as command completion (exit 143).
         val runningOpt = Option(clientProcesses.get(channel))
           .flatMap(processes => Option(processes.get(commandId)))
         runningOpt match {
@@ -169,8 +177,11 @@ object RunnerMain extends cask.MainRoutes {
               logger.error(s"Error destroying process for command $commandId: ${ex.getMessage}", ex)
             }
             logger.info(s"Command $commandId cancelled by client")
-            // Inform the client that the cancellation request was processed
-            sendError(channel, s"Command $commandId cancelled", "COMMAND_CANCELLED", Some(commandId))
+            // Acknowledge cancellation as completion, not as an error.
+            if (running.completionSent.compareAndSet(false, true)) {
+              val durationMs = System.currentTimeMillis() - running.startTimeMs
+              sendMessage(channel, CommandCompletedMessage(commandId, 143, durationMs))
+            }
 
           case None =>
             logger.warn(s"Cancellation requested for unknown or non-running command id $commandId")
@@ -188,10 +199,11 @@ object RunnerMain extends cask.MainRoutes {
   private def handleCommand(channel: cask.WsChannelActor, command: WorkspaceAgentCommand): Unit =
     Future {
       logger.debug(s"Processing command: ${command.getClass.getSimpleName} with ID: ${command.commandId}")
-
-      val result: Either[WorkspaceAgentErrorResponse, WorkspaceAgentResponse] = command match {
+      command match {
+        case cmd: ExecuteCommandCommand =>
+          handleExecuteCommand(channel, cmd)
         case cmd: ExploreFilesCommand =>
-          scala.util
+          val result = scala.util
             .Try(
               workspaceInterface
                 .exploreFiles(cmd.path, cmd.recursive, cmd.excludePatterns, cmd.maxDepth, cmd.returnMetadata)
@@ -199,20 +211,13 @@ object RunnerMain extends cask.MainRoutes {
             )
             .toEither
             .left
-            .map {
-              case e: WorkspaceAgentException =>
-                WorkspaceAgentErrorResponse(cmd.commandId, e.error, e.code, e.details)
-              case e: Exception =>
-                WorkspaceAgentErrorResponse(
-                  cmd.commandId,
-                  e.getMessage,
-                  "EXECUTION_FAILED",
-                  Some(e.getStackTrace.mkString("\n"))
-                )
-            }
-
+            .map(toErrorResponse(cmd.commandId))
+          result.fold(
+            err => sendMessage(channel, ResponseMessage(err)),
+            ok => sendMessage(channel, ResponseMessage(ok))
+          )
         case cmd: ReadFileCommand =>
-          scala.util
+          val result = scala.util
             .Try(
               workspaceInterface
                 .readFile(cmd.path, cmd.startLine, cmd.endLine)
@@ -220,19 +225,13 @@ object RunnerMain extends cask.MainRoutes {
             )
             .toEither
             .left
-            .map {
-              case e: WorkspaceAgentException => WorkspaceAgentErrorResponse(cmd.commandId, e.error, e.code, e.details)
-              case e: Exception =>
-                WorkspaceAgentErrorResponse(
-                  cmd.commandId,
-                  e.getMessage,
-                  "EXECUTION_FAILED",
-                  Some(e.getStackTrace.mkString("\n"))
-                )
-            }
-
+            .map(toErrorResponse(cmd.commandId))
+          result.fold(
+            err => sendMessage(channel, ResponseMessage(err)),
+            ok => sendMessage(channel, ResponseMessage(ok))
+          )
         case cmd: WriteFileCommand =>
-          scala.util
+          val result = scala.util
             .Try(
               workspaceInterface
                 .writeFile(cmd.path, cmd.content, cmd.mode, cmd.createDirectories)
@@ -240,19 +239,13 @@ object RunnerMain extends cask.MainRoutes {
             )
             .toEither
             .left
-            .map {
-              case e: WorkspaceAgentException => WorkspaceAgentErrorResponse(cmd.commandId, e.error, e.code, e.details)
-              case e: Exception =>
-                WorkspaceAgentErrorResponse(
-                  cmd.commandId,
-                  e.getMessage,
-                  "EXECUTION_FAILED",
-                  Some(e.getStackTrace.mkString("\n"))
-                )
-            }
-
+            .map(toErrorResponse(cmd.commandId))
+          result.fold(
+            err => sendMessage(channel, ResponseMessage(err)),
+            ok => sendMessage(channel, ResponseMessage(ok))
+          )
         case cmd: ModifyFileCommand =>
-          scala.util
+          val result = scala.util
             .Try(
               workspaceInterface
                 .modifyFile(cmd.path, cmd.operations)
@@ -260,19 +253,13 @@ object RunnerMain extends cask.MainRoutes {
             )
             .toEither
             .left
-            .map {
-              case e: WorkspaceAgentException => WorkspaceAgentErrorResponse(cmd.commandId, e.error, e.code, e.details)
-              case e: Exception =>
-                WorkspaceAgentErrorResponse(
-                  cmd.commandId,
-                  e.getMessage,
-                  "EXECUTION_FAILED",
-                  Some(e.getStackTrace.mkString("\n"))
-                )
-            }
-
+            .map(toErrorResponse(cmd.commandId))
+          result.fold(
+            err => sendMessage(channel, ResponseMessage(err)),
+            ok => sendMessage(channel, ResponseMessage(ok))
+          )
         case cmd: SearchFilesCommand =>
-          scala.util
+          val result = scala.util
             .Try(
               workspaceInterface
                 .searchFiles(cmd.paths, cmd.query, cmd.`type`, cmd.recursive, cmd.excludePatterns, cmd.contextLines)
@@ -280,44 +267,33 @@ object RunnerMain extends cask.MainRoutes {
             )
             .toEither
             .left
-            .map {
-              case e: WorkspaceAgentException => WorkspaceAgentErrorResponse(cmd.commandId, e.error, e.code, e.details)
-              case e: Exception =>
-                WorkspaceAgentErrorResponse(
-                  cmd.commandId,
-                  e.getMessage,
-                  "EXECUTION_FAILED",
-                  Some(e.getStackTrace.mkString("\n"))
-                )
-            }
-
-        case _: ExecuteCommandCommand =>
-          // Streaming path handles its own messaging and returns the final response asynchronously.
-          Right(GetWorkspaceInfoResponse(command.commandId, workspacePath, Nil, WorkspaceLimits(0, 0, 0, 0)))
-
+            .map(toErrorResponse(cmd.commandId))
+          result.fold(
+            err => sendMessage(channel, ResponseMessage(err)),
+            ok => sendMessage(channel, ResponseMessage(ok))
+          )
         case cmd: GetWorkspaceInfoCommand =>
-          Try(workspaceInterface.getWorkspaceInfo().copy(commandId = cmd.commandId)).toEither.left.map {
-            case e: WorkspaceAgentException => WorkspaceAgentErrorResponse(cmd.commandId, e.error, e.code, e.details)
-            case e: Exception =>
-              WorkspaceAgentErrorResponse(
-                cmd.commandId,
-                e.getMessage,
-                "EXECUTION_FAILED",
-                Some(e.getStackTrace.mkString("\n"))
-              )
-          }
-      }
-
-      command match {
-        case cmd: ExecuteCommandCommand =>
-          handleExecuteCommand(channel, cmd)
-        case _ =>
+          val result = Try(workspaceInterface.getWorkspaceInfo().copy(commandId = cmd.commandId)).toEither.left.map(
+            toErrorResponse(cmd.commandId)
+          )
           result.fold(
             err => sendMessage(channel, ResponseMessage(err)),
             ok => sendMessage(channel, ResponseMessage(ok))
           )
       }
     }(ec)
+
+  private def toErrorResponse(commandId: String)(e: Throwable): WorkspaceAgentErrorResponse =
+    e match {
+      case ex: WorkspaceAgentException => WorkspaceAgentErrorResponse(commandId, ex.error, ex.code, ex.details)
+      case ex: Exception =>
+        WorkspaceAgentErrorResponse(
+          commandId,
+          Option(ex.getMessage).getOrElse("Execution failed"),
+          "EXECUTION_FAILED",
+          Some(ex.getStackTrace.mkString("\n"))
+        )
+    }
 
   private def sendCommandFailure(
     channel: cask.WsChannelActor,
@@ -393,7 +369,8 @@ object RunnerMain extends cask.MainRoutes {
                   durationMs = System.currentTimeMillis() - startTime
                 ),
               process => {
-                val running = RunningCommand(process, new AtomicBoolean(false))
+                val running =
+                  RunningCommand(process, new AtomicBoolean(false), startTime, new AtomicBoolean(false))
                 processes.put(cmd.commandId, running)
 
                 val stdoutDone        = Promise[Unit]()
@@ -430,7 +407,8 @@ object RunnerMain extends cask.MainRoutes {
                           val remaining = (MaxOutputSize - captured).toInt
                           val toCopy    = math.min(remaining, bytesRead)
                           if (toCopy > 0) {
-                            accumulator.append(new String(buffer, 0, toCopy, StandardCharsets.UTF_8))
+                            val toAppend = if (toCopy == bytesRead) chunk else chunk.substring(0, toCopy)
+                            accumulator.append(toAppend)
                             captured += toCopy
                           }
                           if (toCopy < bytesRead) truncated.set(true)
@@ -452,30 +430,29 @@ object RunnerMain extends cask.MainRoutes {
                   val exitCode =
                     try {
                       val timeoutDeadlineMs = cmd.timeout.map(timeoutSec => startTime + (timeoutSec.toLong * 1000L))
-                      var finished          = false
-                      var timedOut          = false
-
-                      while (!finished && !running.cancelled.get())
-                        timeoutDeadlineMs match {
-                          case Some(deadlineMs) if System.currentTimeMillis() >= deadlineMs =>
-                            timedOut = true
-                            finished = true
-                          case _ =>
-                            finished = process.waitFor(500, TimeUnit.MILLISECONDS)
-                        }
-
-                      if (running.cancelled.get()) {
-                        process.destroyForcibly()
-                        // Preserve POSIX shell convention commonly used in tooling for SIGTERM-style cancellation.
-                        143
-                      } else if (timedOut) {
-                        commandTimedOut.set(true)
-                        process.destroyForcibly()
-                        -1
-                      } else if (finished) {
-                        process.exitValue()
-                      } else {
-                        -1
+                      timeoutDeadlineMs match {
+                        case Some(deadlineMs) =>
+                          var finished = false
+                          var timedOut = false
+                          while (!finished && !running.cancelled.get())
+                            if (System.currentTimeMillis() >= deadlineMs) {
+                              timedOut = true
+                              finished = true
+                            } else {
+                              finished = process.waitFor(500, TimeUnit.MILLISECONDS)
+                            }
+                          if (running.cancelled.get()) {
+                            process.destroyForcibly()
+                            143
+                          } else if (timedOut) {
+                            commandTimedOut.set(true)
+                            process.destroyForcibly()
+                            -1
+                          } else {
+                            process.exitValue()
+                          }
+                        case None =>
+                          process.waitFor()
                       }
                     } catch {
                       case _: InterruptedException =>
@@ -519,7 +496,9 @@ object RunnerMain extends cask.MainRoutes {
                           )
                         )
                       )
-                      sendMessage(channel, CommandCompletedMessage(cmd.commandId, effectiveExitCode, durationMs))
+                      if (running.completionSent.compareAndSet(false, true)) {
+                        sendMessage(channel, CommandCompletedMessage(cmd.commandId, effectiveExitCode, durationMs))
+                      }
                     case Failure(ex) =>
                       sendCommandFailure(
                         channel,
@@ -541,33 +520,42 @@ object RunnerMain extends cask.MainRoutes {
 
   private def resolveWorkingDirectory(workingDirectory: Option[String]): Either[WorkspaceAgentException, java.io.File] =
     Try {
-      val candidatePath: Path = workingDirectory match {
+      workingDirectory match {
         case Some(dir) => workspaceRootPath.resolve(dir).normalize()
         case None      => workspaceRootPath
       }
-      if (!candidatePath.startsWith(workspaceRootPath))
-        throw new WorkspaceAgentException(
-          s"Working directory '$workingDirectory' attempts to escape the workspace",
-          "INVALID_DIRECTORY",
-          None
+    }.toEither match {
+      case Left(e) =>
+        Left(
+          new WorkspaceAgentException(
+            Option(e.getMessage).getOrElse("Invalid working directory"),
+            "INVALID_DIRECTORY",
+            None
+          )
         )
-
-      val candidate = candidatePath.toFile
-      if (!candidate.exists() || !candidate.isDirectory)
-        throw new WorkspaceAgentException(
-          "Invalid working directory",
-          "INVALID_DIRECTORY",
-          Some(s"Working directory does not exist: ${candidate.getPath}")
-        )
-      candidate
-    }.toEither.left.map {
-      case e: WorkspaceAgentException => e
-      case e: Exception =>
-        new WorkspaceAgentException(
-          Option(e.getMessage).getOrElse("Invalid working directory"),
-          "INVALID_DIRECTORY",
-          None
-        )
+      case Right(candidatePath) =>
+        if (!candidatePath.startsWith(workspaceRootPath)) {
+          Left(
+            new WorkspaceAgentException(
+              s"Working directory '$workingDirectory' attempts to escape the workspace",
+              "INVALID_DIRECTORY",
+              None
+            )
+          )
+        } else {
+          val candidate = candidatePath.toFile
+          if (!candidate.exists() || !candidate.isDirectory) {
+            Left(
+              new WorkspaceAgentException(
+                "Invalid working directory",
+                "INVALID_DIRECTORY",
+                Some(s"Working directory does not exist: ${candidate.getPath}")
+              )
+            )
+          } else {
+            Right(candidate)
+          }
+        }
     }
 
   private def sendMessage(channel: cask.WsChannelActor, message: WebSocketMessage): Unit = {
