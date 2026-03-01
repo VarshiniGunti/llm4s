@@ -90,7 +90,7 @@ class WorkspaceAgentInterfaceImpl(
         .replace("*", "[^/]+")      // single * matches path segment chars
         .replace(placeholder, ".*") // restore ** as .* to match any path
 
-      normalizedPath.matches(regex)
+      normalizedPath.matches(regex) || (normalizedPath + "/").matches(regex)
     }
   }
 
