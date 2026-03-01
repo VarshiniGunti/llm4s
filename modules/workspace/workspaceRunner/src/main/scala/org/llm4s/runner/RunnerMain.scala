@@ -594,7 +594,15 @@ object RunnerMain extends cask.MainRoutes {
             Option(clientProcesses.remove(channel)).foreach { processes =>
               processes.forEach { (_, running) =>
                 running.cancelled.set(true)
-                Try(running.process.destroyForcibly())
+                val terminateAttempt = Try {
+                  val destroyedProcess = running.process.destroyForcibly()
+                  if (!destroyedProcess.waitFor(5, TimeUnit.SECONDS)) {
+                    logger.warn("Process did not terminate within timeout after heartbeat disconnect")
+                  }
+                }
+                terminateAttempt.failed.foreach { ex =>
+                  logger.error(s"Error destroying process on heartbeat timeout: ${ex.getMessage}", ex)
+                }
               }
             }
             connections.remove(channel)
@@ -652,7 +660,13 @@ object RunnerMain extends cask.MainRoutes {
     clientProcesses.forEach { (_, processes) =>
       processes.forEach { (_, running) =>
         running.cancelled.set(true)
-        Try(running.process.destroyForcibly()).failed.foreach { ex =>
+        val terminateAttempt = Try {
+          val destroyedProcess = running.process.destroyForcibly()
+          if (!destroyedProcess.waitFor(5, TimeUnit.SECONDS)) {
+            logger.warn("Process did not terminate within timeout during shutdown")
+          }
+        }
+        terminateAttempt.failed.foreach { ex =>
           logger.error(s"Error destroying process on shutdown: ${ex.getMessage}", ex)
         }
       }
