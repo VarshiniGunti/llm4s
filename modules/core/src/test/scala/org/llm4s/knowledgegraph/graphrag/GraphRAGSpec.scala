@@ -41,7 +41,7 @@ class GraphRAGSpec extends AnyFunSuite with Matchers {
     ): Result[Completion] =
       complete(conversation, options)
 
-    override def getContextWindow(): Int = 8192
+    override def getContextWindow(): Int     = 8192
     override def getReserveCompletion(): Int = 1024
   }
 

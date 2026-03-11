@@ -43,7 +43,7 @@ final case class GraphCommunity(
 
 final case class GraphCommunityHierarchy(levels: Vector[Vector[GraphCommunity]]) {
   def allCommunities: Vector[GraphCommunity] = levels.flatten
-  def topLevel: Vector[GraphCommunity]        = levels.lastOption.getOrElse(Vector.empty)
+  def topLevel: Vector[GraphCommunity]       = levels.lastOption.getOrElse(Vector.empty)
 }
 
 sealed trait GraphRAGMode
@@ -145,7 +145,7 @@ final class GraphRAG(
     for {
       graph     <- loadBaseGraph()
       hierarchy <- summarizeCommunities(forceRefresh = false)
-      seeds = GraphRAG.findSeedNodes(query, graph).take(3).map(_.id)
+      seeds     = GraphRAG.findSeedNodes(query, graph).take(3).map(_.id)
       traversal = GraphRAG.traverseFromSeeds(graph, seeds, maxDepth)
       supportingCommunities = hierarchy.allCommunities
         .filter(c => traversal.nonEmpty && c.nodeIds.exists(traversal.contains))
@@ -168,9 +168,9 @@ final class GraphRAG(
     for {
       graph     <- loadBaseGraph()
       hierarchy <- summarizeCommunities(forceRefresh = false)
-      seedIds   = GraphRAG.resolveSeedsFromVector(vectorResults, graph)
-      expanded  = GraphRAG.traverseWithDepth(graph, seedIds, maxDepth)
-      hits      = GraphRAG.rankHybridHits(graph, expanded, vectorResults, config)
+      seedIds  = GraphRAG.resolveSeedsFromVector(vectorResults, graph)
+      expanded = GraphRAG.traverseWithDepth(graph, seedIds, maxDepth)
+      hits     = GraphRAG.rankHybridHits(graph, expanded, vectorResults, config)
       communities = hierarchy.allCommunities
         .filter(c => hits.exists(h => c.nodeIds.contains(h.node.id)))
         .sortBy(c => -hits.count(h => c.nodeIds.contains(h.node.id)))
@@ -182,7 +182,7 @@ final class GraphRAG(
     loadBaseGraph().map { graph =>
       val broadIndicators =
         Set("overall", "themes", "theme", "across", "summarize", "summary", "landscape", "big picture")
-      val q = query.toLowerCase
+      val q              = query.toLowerCase
       val hasBroadIntent = broadIndicators.exists(indicator => q.contains(indicator))
       val hasEntities    = GraphRAG.findSeedNodes(query, graph).nonEmpty
       if (hasBroadIntent) GraphRAGMode.Global
@@ -243,9 +243,9 @@ final class GraphRAG(
           label = "Community",
           properties = Map(
             "communityId" -> ujson.Str(community.id),
-            "level" -> ujson.Num(community.level),
-            "summary" -> ujson.Str(summaryText),
-            "edgeCount" -> ujson.Num(community.edgeCount)
+            "level"       -> ujson.Num(community.level),
+            "summary"     -> ujson.Str(summaryText),
+            "edgeCount"   -> ujson.Num(community.edgeCount)
           )
         )
 
@@ -271,10 +271,10 @@ final class GraphRAG(
 
 private[graphrag] object GraphRAG {
 
-  private val CommunityLabel       = "Community"
-  private val CommunityIdPrefix    = "community:"
-  private val SummaryModelTemp     = CompletionOptions(temperature = 0.0)
-  private val NamePropertyKeys     = Seq("name", "title", "entity", "id")
+  private val CommunityLabel         = "Community"
+  private val CommunityIdPrefix      = "community:"
+  private val SummaryModelTemp       = CompletionOptions(temperature = 0.0)
+  private val NamePropertyKeys       = Seq("name", "title", "entity", "id")
   private val ProvenancePropertyKeys = Seq("source", "docId", "documentId", "path")
 
   def filterCommunityArtifacts(graph: Graph): Graph = {
@@ -319,9 +319,9 @@ private[graphrag] object GraphRAG {
       if (distinctParents.size == currentLevelCommunities.size) {
         level = config.maxCommunityLevels
       } else {
-        val parentIdRemap = distinctParents.toSeq.sorted.zipWithIndex
-          .map { case (rawId, idx) => rawId -> s"L$level-C$idx" }
-          .toMap
+        val parentIdRemap = distinctParents.toSeq.sorted.zipWithIndex.map { case (rawId, idx) =>
+          rawId -> s"L$level-C$idx"
+        }.toMap
 
         val updatedPrevLevel = currentLevelCommunities.map { community =>
           community.copy(parentCommunityId = Some(parentIdRemap(parentAssignmentTemp(community.id))))
@@ -329,16 +329,19 @@ private[graphrag] object GraphRAG {
         levels = levels.dropRight(1) :+ updatedPrevLevel
 
         val grouped = currentLevelCommunities.groupBy(c => parentIdRemap(parentAssignmentTemp(c.id)))
-        val nextLevel = grouped.toSeq.sortBy(_._1).map { case (communityId, children) =>
-          val nodeIds = children.flatMap(_.nodeIds).toSet
-          val edgeCount = graph.edges.count(e => nodeIds.contains(e.source) && nodeIds.contains(e.target))
-          GraphCommunity(
-            id = communityId,
-            level = level,
-            nodeIds = nodeIds,
-            edgeCount = edgeCount
-          )
-        }.toVector
+        val nextLevel = grouped.toSeq
+          .sortBy(_._1)
+          .map { case (communityId, children) =>
+            val nodeIds   = children.flatMap(_.nodeIds).toSet
+            val edgeCount = graph.edges.count(e => nodeIds.contains(e.source) && nodeIds.contains(e.target))
+            GraphCommunity(
+              id = communityId,
+              level = level,
+              nodeIds = nodeIds,
+              edgeCount = edgeCount
+            )
+          }
+          .toVector
 
         levels = levels :+ nextLevel
         currentLevelCommunities = nextLevel
@@ -358,11 +361,12 @@ private[graphrag] object GraphRAG {
       hierarchy.levels.foldLeft[Result[Vector[Vector[GraphCommunity]]]](Right(Vector.empty)) { (acc, level) =>
         for {
           built <- acc
-          summarizedLevel <- level.foldLeft[Result[Vector[GraphCommunity]]](Right(Vector.empty)) { (levelAcc, community) =>
-            for {
-              running <- levelAcc
-              summary <- summarizeCommunity(graph, community, llmClient)
-            } yield running :+ community.copy(summary = Some(summary))
+          summarizedLevel <- level.foldLeft[Result[Vector[GraphCommunity]]](Right(Vector.empty)) {
+            (levelAcc, community) =>
+              for {
+                running <- levelAcc
+                summary <- summarizeCommunity(graph, community, llmClient)
+              } yield running :+ community.copy(summary = Some(summary))
           }
         } yield built :+ summarizedLevel
       }
@@ -466,9 +470,12 @@ private[graphrag] object GraphRAG {
     communities: Seq[GraphCommunity],
     llmClient: LLMClient
   ): Result[String] = {
-    val topHits = hits.take(10).map { hit =>
-      f"${hit.node.id}%-20s score=${hit.score}%.4f vector=${hit.vectorScore}%.4f graph=${hit.graphScore}%.4f"
-    }.mkString("\n")
+    val topHits = hits
+      .take(10)
+      .map { hit =>
+        f"${hit.node.id}%-20s score=${hit.score}%.4f vector=${hit.vectorScore}%.4f graph=${hit.graphScore}%.4f"
+      }
+      .mkString("\n")
     val summaries = communities.flatMap(_.summary).take(8).mkString("\n\n")
 
     val convo = Conversation(
@@ -496,9 +503,12 @@ private[graphrag] object GraphRAG {
 
     val scored = graph.nodes.values.toSeq.flatMap { node =>
       val idScore = if (tokens.exists(t => node.id.toLowerCase.contains(t))) 2 else 0
-      val nameScore = NamePropertyKeys.flatMap(node.properties.get).collect {
-        case ujson.Str(s) if tokens.exists(t => s.toLowerCase.contains(t)) => 3
-      }.sum
+      val nameScore = NamePropertyKeys
+        .flatMap(node.properties.get)
+        .collect {
+          case ujson.Str(s) if tokens.exists(t => s.toLowerCase.contains(t)) => 3
+        }
+        .sum
       val propScore = node.properties.values.collect {
         case ujson.Str(s) if tokens.exists(t => s.toLowerCase.contains(t)) => 1
       }.sum
@@ -517,9 +527,7 @@ private[graphrag] object GraphRAG {
     val visited   = mutable.Map.empty[String, Int]
     val queue     = mutable.Queue.empty[(String, Int)]
 
-    seedIds.filter(graph.nodes.contains).toSeq.sorted.foreach { id =>
-      queue.enqueue((id, 0))
-    }
+    seedIds.filter(graph.nodes.contains).toSeq.sorted.foreach(id => queue.enqueue((id, 0)))
 
     while (queue.nonEmpty) {
       val (nodeId, depth) = queue.dequeue()
@@ -542,21 +550,25 @@ private[graphrag] object GraphRAG {
     vectorResults: Seq[HybridSearchResult],
     graph: Graph
   ): Set[String] = {
-    val directIds = vectorResults.flatMap { res =>
-      val metadata = res.metadata
-      Seq("entityId", "entity", "entity_id", "nodeId").flatMap(metadata.get)
-    }.filter(graph.nodes.contains).toSet
+    val directIds = vectorResults
+      .flatMap { res =>
+        val metadata = res.metadata
+        Seq("entityId", "entity", "entity_id", "nodeId").flatMap(metadata.get)
+      }
+      .filter(graph.nodes.contains)
+      .toSet
 
     if (directIds.nonEmpty) return directIds
 
     val provenanceMatches = vectorResults.flatMap { res =>
       val provenanceValues = ProvenancePropertyKeys.flatMap(res.metadata.get).map(_.toLowerCase).toSet
-      graph.nodes.values.filter { node =>
-        val nodeProvenance = ProvenancePropertyKeys.flatMap(node.properties.get).collect {
-          case ujson.Str(s) => s.toLowerCase
-        }.toSet
-        provenanceValues.intersect(nodeProvenance).nonEmpty
-      }.map(_.id)
+      graph.nodes.values
+        .filter { node =>
+          val nodeProvenance =
+            ProvenancePropertyKeys.flatMap(node.properties.get).collect { case ujson.Str(s) => s.toLowerCase }.toSet
+          provenanceValues.intersect(nodeProvenance).nonEmpty
+        }
+        .map(_.id)
     }.toSet
 
     if (provenanceMatches.nonEmpty) return provenanceMatches
@@ -575,14 +587,16 @@ private[graphrag] object GraphRAG {
     val maxDepthSeen = math.max(nodeDepths.values.foldLeft(0)(math.max), 1)
     val totalWeight  = config.hybridVectorWeight + config.hybridGraphWeight
 
-    nodeDepths.toSeq.flatMap { case (nodeId, depth) =>
-      graph.nodes.get(nodeId).map { node =>
-        val graphScore  = 1.0 - (depth.toDouble / (maxDepthSeen + 1).toDouble)
-        val combinedRaw = config.hybridVectorWeight * vectorSignal + config.hybridGraphWeight * graphScore
-        val combined    = combinedRaw / totalWeight
-        GraphHybridHit(node = node, score = combined, vectorScore = vectorSignal, graphScore = graphScore)
+    nodeDepths.toSeq
+      .flatMap { case (nodeId, depth) =>
+        graph.nodes.get(nodeId).map { node =>
+          val graphScore  = 1.0 - (depth.toDouble / (maxDepthSeen + 1).toDouble)
+          val combinedRaw = config.hybridVectorWeight * vectorSignal + config.hybridGraphWeight * graphScore
+          val combined    = combinedRaw / totalWeight
+          GraphHybridHit(node = node, score = combined, vectorScore = vectorSignal, graphScore = graphScore)
+        }
       }
-    }.sortBy(hit => (-hit.score, hit.node.id))
+      .sortBy(hit => (-hit.score, hit.node.id))
   }
 
   def lexicalScore(query: String, text: String): Double = {
@@ -645,7 +659,8 @@ private[graphrag] object GraphRAG {
     while (iter < iterations) {
       var changed = false
       sortedNodes.foreach { node =>
-        val neighborCommunities = adjacency.getOrElse(node, Set.empty)
+        val neighborCommunities = adjacency
+          .getOrElse(node, Set.empty)
           .toSeq
           .flatMap(assignment.get)
           .groupBy(identity)
@@ -672,9 +687,13 @@ private[graphrag] object GraphRAG {
     }
 
     // Canonicalize IDs for deterministic output.
-    val canonical = assignment.toSeq.groupBy(_._2).toSeq.sortBy(_._1).zipWithIndex.map {
-      case ((rawCommunityId, _), idx) => rawCommunityId -> s"C$idx"
-    }.toMap
+    val canonical = assignment.toSeq
+      .groupBy(_._2)
+      .toSeq
+      .sortBy(_._1)
+      .zipWithIndex
+      .map { case ((rawCommunityId, _), idx) => rawCommunityId -> s"C$idx" }
+      .toMap
 
     assignment.toSeq.map { case (node, communityId) => node -> canonical(communityId) }.toMap
   }
@@ -689,21 +708,25 @@ private[graphrag] object GraphRAG {
       cid -> entries.keySet
     }
 
-    val (large, small) = grouped.partition { case (_, nodes) => nodes.size >= minCommunitySize }
+    val (large, small)     = grouped.partition { case (_, nodes) => nodes.size >= minCommunitySize }
     val mergedSmallNodeIds = small.values.flatten.toSet
     val merged = if (mergedSmallNodeIds.nonEmpty) {
       large + ("small" -> (large.getOrElse("small", Set.empty[String]) ++ mergedSmallNodeIds))
     } else large
 
-    merged.toSeq.sortBy(_._1).zipWithIndex.map { case ((_, nodeIds), idx) =>
-      val edgeCount = graph.edges.count(e => nodeIds.contains(e.source) && nodeIds.contains(e.target))
-      GraphCommunity(
-        id = s"L$level-C$idx",
-        level = level,
-        nodeIds = nodeIds,
-        edgeCount = edgeCount
-      )
-    }.toVector
+    merged.toSeq
+      .sortBy(_._1)
+      .zipWithIndex
+      .map { case ((_, nodeIds), idx) =>
+        val edgeCount = graph.edges.count(e => nodeIds.contains(e.source) && nodeIds.contains(e.target))
+        GraphCommunity(
+          id = s"L$level-C$idx",
+          level = level,
+          nodeIds = nodeIds,
+          edgeCount = edgeCount
+        )
+      }
+      .toVector
   }
 
   private def summarizeCommunity(graph: Graph, community: GraphCommunity, llmClient: LLMClient): Result[String] = {
