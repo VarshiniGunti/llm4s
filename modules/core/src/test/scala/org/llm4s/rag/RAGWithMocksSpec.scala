@@ -1,6 +1,9 @@
 package org.llm4s.rag
 
 import org.llm4s.error.{ ConfigurationError, ProcessingError }
+import org.llm4s.knowledgegraph.graphrag.{ GraphRAGConfig, GraphRAGMode }
+import org.llm4s.knowledgegraph.storage.InMemoryGraphStore
+import org.llm4s.knowledgegraph.{ Edge, Node }
 import org.llm4s.llmconnect.{ EmbeddingClient, LLMClient }
 import org.llm4s.llmconnect.config.EmbeddingProviderConfig
 import org.llm4s.llmconnect.model._
@@ -369,6 +372,19 @@ class RAGWithMocksSpec extends AnyFlatSpec with Matchers with BeforeAndAfterEach
     val file = new File(tempDir, name)
     Files.write(file.toPath, content.getBytes)
     file
+  }
+
+  private def createSeededGraphStore(): InMemoryGraphStore = {
+    val store = new InMemoryGraphStore()
+    val nodes = Seq(
+      Node("alice", "Person", Map("name" -> ujson.Str("Alice"), "source" -> ujson.Str("doc1"))),
+      Node("bob", "Person", Map("name" -> ujson.Str("Bob"), "source" -> ujson.Str("doc1"))),
+      Node("company", "Org", Map("name" -> ujson.Str("Acme Corp"), "source" -> ujson.Str("doc1")))
+    )
+    nodes.foreach(node => store.upsertNode(node).isRight shouldBe true)
+    store.upsertEdge(Edge("alice", "bob", "KNOWS")).isRight shouldBe true
+    store.upsertEdge(Edge("alice", "company", "WORKS_AT")).isRight shouldBe true
+    store
   }
 
   // ==========================================================================
@@ -856,6 +872,39 @@ class RAGWithMocksSpec extends AnyFlatSpec with Matchers with BeforeAndAfterEach
 
     result.isLeft shouldBe true
     result.left.toOption.get shouldBe a[ConfigurationError]
+  }
+
+  // ==========================================================================
+  // GraphRAG API Tests
+  // ==========================================================================
+
+  "RAG.hasGraphRAG" should "return false when GraphStore is not configured" in {
+    val rag = createMockRAG(withLLM = true).toOption.get
+    rag.hasGraphRAG shouldBe false
+  }
+
+  "RAG.build" should "fail when GraphStore is configured without LLM client" in {
+    val config = RAGConfig.default.withGraphStore(createSeededGraphStore())
+    val result = createMockRAG(withLLM = false, config = config)
+
+    result.isLeft shouldBe true
+    result.left.toOption.get shouldBe a[ConfigurationError]
+  }
+
+  "RAG.queryWithGraphRAG" should "route through GraphRAG when configured" in {
+    val graphStore = createSeededGraphStore()
+    val config = RAGConfig.default
+      .withGraphStore(graphStore)
+      .withGraphRAG(GraphRAGConfig(localTraversalDepth = 1, globalTopCommunities = 2))
+
+    mockLLMClient.responseOverride = Some("graph answer")
+    val rag = createMockRAG(withLLM = true, config = config).toOption.get
+
+    val result = rag.queryWithGraphRAGMode("What does Alice do?", GraphRAGMode.Local)
+    result.isRight shouldBe true
+    result.toOption.get.mode shouldBe GraphRAGMode.Local
+    result.toOption.get.answer shouldBe "graph answer"
+    rag.hasGraphRAG shouldBe true
   }
 
   // ==========================================================================
