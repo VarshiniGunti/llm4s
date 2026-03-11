@@ -1,7 +1,7 @@
 package org.llm4s.knowledgegraph.graphrag
 
 import org.llm4s.knowledgegraph.storage.InMemoryGraphStore
-import org.llm4s.knowledgegraph.{ Edge, Node }
+import org.llm4s.knowledgegraph.{ Edge, Graph, Node }
 import org.llm4s.llmconnect.LLMClient
 import org.llm4s.llmconnect.model._
 import org.llm4s.types.Result
@@ -176,5 +176,104 @@ class GraphRAGSpec extends AnyFunSuite with Matchers {
 
     rag.summarizeCommunities(forceRefresh = true).isRight shouldBe true
     store.getNode("community:stale").toOption.flatten shouldBe None
+  }
+
+  test("detectCommunities uses cache unless forceRefresh is true") {
+    val store = seededStore()
+    val rag   = new GraphRAG(store, new DeterministicLLM())
+
+    val before = rag.detectCommunities().toOption.get
+    before.levels.head.flatMap(_.nodeIds).toSet should not contain "eve"
+
+    store
+      .upsertNode(Node("eve", "Person", Map("name" -> ujson.Str("Eve"), "source" -> ujson.Str("doc-c"))))
+      .isRight shouldBe true
+
+    val cached = rag.detectCommunities().toOption.get
+    cached.levels.head.flatMap(_.nodeIds).toSet should not contain "eve"
+
+    val refreshed = rag.detectCommunities(forceRefresh = true).toOption.get
+    refreshed.levels.head.flatMap(_.nodeIds).toSet should contain("eve")
+  }
+
+  test("globalSearch returns error when no communities have summaries") {
+    val emptyStore = new InMemoryGraphStore()
+    val rag        = new GraphRAG(emptyStore, new DeterministicLLM())
+
+    rag.globalSearch("What are the themes?").isLeft shouldBe true
+  }
+
+  test("route chooses local for entity queries and global for broad/fallback queries") {
+    val rag = new GraphRAG(seededStore(), new DeterministicLLM())
+
+    rag.route("What does Alice do?").toOption.get shouldBe GraphRAGMode.Local
+    rag.route("Give an overall summary of themes across the corpus").toOption.get shouldBe GraphRAGMode.Global
+    rag.route("qwerty asdfgh zxcvbn").toOption.get shouldBe GraphRAGMode.Global
+  }
+
+  test("answer routes to local/global when no vector hits and hybrid when vector hits exist") {
+    val rag = new GraphRAG(seededStore(), new DeterministicLLM())
+    val vectorResults = Seq(
+      HybridSearchResult(
+        id = "doc-a-chunk-0",
+        content = "Alice works at FinTech Labs",
+        score = 0.95,
+        metadata = Map("entityId" -> "alice")
+      )
+    )
+
+    rag.answer("What does Alice do?").toOption.get.mode shouldBe GraphRAGMode.Local
+    rag.answer("Give an overall summary of themes").toOption.get.mode shouldBe GraphRAGMode.Global
+    rag.answer("Who is connected to Alice?", vectorResults).toOption.get.mode shouldBe GraphRAGMode.Hybrid
+  }
+
+  test("filterCommunityArtifacts removes synthetic community nodes and dangling edges") {
+    val graph = Graph(
+      nodes = Map(
+        "alice"         -> Node("alice", "Person"),
+        "community:L0"  -> Node("community:L0", "Community"),
+        "regular-node2" -> Node("regular-node2", "Org")
+      ),
+      edges = List(
+        Edge("alice", "regular-node2", "KNOWS"),
+        Edge("community:L0", "alice", "CONTAINS"),
+        Edge("alice", "community:L0", "CONTAINS")
+      )
+    )
+
+    val filtered = GraphRAG.filterCommunityArtifacts(graph)
+    filtered.nodes.keySet shouldBe Set("alice", "regular-node2")
+    filtered.edges.map(e => (e.source, e.target)) shouldBe List(("alice", "regular-node2"))
+  }
+
+  test("resolveSeedsFromVector uses provenance and lexical fallbacks when direct entity ids are missing") {
+    val graph = seededStore().loadAll().toOption.get
+
+    val provenanceSeeds = GraphRAG.resolveSeedsFromVector(
+      vectorResults = Seq(
+        HybridSearchResult(
+          id = "doc-b-hit",
+          content = "Bank discussion",
+          score = 0.7,
+          metadata = Map("docId" -> "doc-b")
+        )
+      ),
+      graph = graph
+    )
+    provenanceSeeds should not be empty
+    provenanceSeeds.exists(id => Set("carol", "dave", "bank").contains(id)) shouldBe true
+
+    val lexicalSeeds = GraphRAG.resolveSeedsFromVector(
+      vectorResults = Seq(
+        HybridSearchResult(
+          id = "no-meta",
+          content = "Alice worked with Bob at FinTech Labs",
+          score = 0.6,
+          metadata = Map.empty
+        )
+      ),
+      graph = graph
+    )
+    lexicalSeeds should contain("alice")
   }
 }

@@ -923,6 +923,41 @@ class RAGWithMocksSpec extends AnyFlatSpec with Matchers with BeforeAndAfterEach
     mockEmbeddingProvider.embedCalls shouldBe 0
   }
 
+  it should "fail when GraphRAG is not configured" in {
+    val rag = createMockRAG(withLLM = true).toOption.get
+
+    val result = rag.queryWithGraphRAG("What does Alice do?")
+    result.isLeft shouldBe true
+    result.left.toOption.get shouldBe a[ConfigurationError]
+  }
+
+  "RAG.queryWithGraphRAGMode" should "fail when GraphRAG is not configured" in {
+    val rag = createMockRAG(withLLM = true).toOption.get
+
+    val result = rag.queryWithGraphRAGMode("What does Alice do?", GraphRAGMode.Local)
+    result.isLeft shouldBe true
+    result.left.toOption.get shouldBe a[ConfigurationError]
+  }
+
+  it should "execute vector retrieval only for hybrid mode" in {
+    val graphStore = createSeededGraphStore()
+    val config = RAGConfig.default
+      .withGraphStore(graphStore)
+      .withGraphRAG(GraphRAGConfig(localTraversalDepth = 1, globalTopCommunities = 2))
+
+    mockLLMClient.responseOverride = Some("hybrid graph answer")
+    val rag = createMockRAG(withLLM = true, config = config).toOption.get
+
+    rag.ingestText("Alice works with Bob at Acme Corp.", "doc1").isRight shouldBe true
+    mockEmbeddingProvider.reset()
+
+    val result = rag.queryWithGraphRAGMode("Who is connected to Alice?", GraphRAGMode.Hybrid)
+    result.isRight shouldBe true
+    result.toOption.get.mode shouldBe GraphRAGMode.Hybrid
+    result.toOption.get.answer shouldBe "hybrid graph answer"
+    mockEmbeddingProvider.embedCalls should be > 0
+  }
+
   // ==========================================================================
   // Configuration Tests
   // ==========================================================================

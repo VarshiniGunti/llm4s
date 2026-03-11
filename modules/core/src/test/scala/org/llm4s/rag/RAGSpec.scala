@@ -199,6 +199,10 @@ class RAGSpec extends AnyFlatSpec with Matchers {
     config.hasGraphRAG shouldBe true
   }
 
+  it should "report GraphRAG disabled by default" in {
+    RAGConfig().hasGraphRAG shouldBe false
+  }
+
   "RAGConfig.default" should "equal empty RAGConfig" in {
     RAGConfig.default shouldBe RAGConfig()
   }
