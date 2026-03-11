@@ -907,6 +907,22 @@ class RAGWithMocksSpec extends AnyFlatSpec with Matchers with BeforeAndAfterEach
     rag.hasGraphRAG shouldBe true
   }
 
+  it should "route first and avoid vector retrieval for global mode" in {
+    val graphStore = createSeededGraphStore()
+    val config = RAGConfig.default
+      .withGraphStore(graphStore)
+      .withGraphRAG(GraphRAGConfig(globalTopCommunities = 2))
+
+    mockLLMClient.responseOverride = Some("global graph answer")
+    val rag = createMockRAG(withLLM = true, config = config).toOption.get
+
+    val result = rag.queryWithGraphRAG("Give an overall summary of themes")
+    result.isRight shouldBe true
+    result.toOption.get.mode shouldBe GraphRAGMode.Global
+    result.toOption.get.answer shouldBe "global graph answer"
+    mockEmbeddingProvider.embedCalls shouldBe 0
+  }
+
   // ==========================================================================
   // Configuration Tests
   // ==========================================================================

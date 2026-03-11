@@ -114,29 +114,46 @@ final class GraphRAG(
     }
 
   def summarizeCommunities(forceRefresh: Boolean = false): Result[GraphCommunityHierarchy] =
-    for {
-      hierarchy <- detectCommunities(forceRefresh)
-      graph     <- loadBaseGraph()
-      summarized <- GraphRAG.summarizeHierarchy(
-        graph = graph,
-        hierarchy = hierarchy,
-        llmClient = llmClient
-      )
-      _ <- persistCommunityNodes(summarized)
-    } yield {
-      hierarchyCache = Some(summarized)
-      summarized
+    hierarchyCache match {
+      case Some(cached) if !forceRefresh && GraphRAG.hasSummaries(cached) =>
+        Right(cached)
+      case _ =>
+        for {
+          hierarchy <- detectCommunities(forceRefresh)
+          graph     <- loadBaseGraph()
+          summarized <- GraphRAG.summarizeHierarchy(
+            graph = graph,
+            hierarchy = hierarchy,
+            llmClient = llmClient
+          )
+          _ <- persistCommunityNodes(summarized)
+        } yield {
+          hierarchyCache = Some(summarized)
+          summarized
+        }
     }
 
   def globalSearch(query: String, topK: Int = config.globalTopCommunities): Result[GraphGlobalSearchResult] =
     for {
       hierarchy <- summarizeCommunities(forceRefresh = false)
-      ranked = hierarchy.allCommunities
+      scored = hierarchy.allCommunities
         .filter(_.summary.exists(_.trim.nonEmpty))
         .map(c => c -> GraphRAG.lexicalScore(query, c.summary.getOrElse("")))
-        .filter(_._2 > 0.0)
         .sortBy { case (_, score) => -score }
-        .take(topK)
+      ranked = {
+        val positive = scored.filter(_._2 > 0.0).take(topK)
+        if (positive.nonEmpty) positive else scored.take(topK)
+      }
+      _ <-
+        if (ranked.nonEmpty) Right(())
+        else {
+          Left(
+            ProcessingError(
+              "global_search_no_relevant_communities",
+              "No community summaries available for global search"
+            )
+          )
+        }
       partials <- GraphRAG.mapPartials(query, ranked, llmClient)
       answer   <- GraphRAG.reducePartials(query, partials, llmClient)
     } yield GraphGlobalSearchResult(query, answer, ranked, partials)
@@ -145,8 +162,15 @@ final class GraphRAG(
     for {
       graph     <- loadBaseGraph()
       hierarchy <- summarizeCommunities(forceRefresh = false)
-      seeds     = GraphRAG.findSeedNodes(query, graph).take(3).map(_.id)
+      seeds = GraphRAG.findSeedNodes(query, graph).take(3).map(_.id)
+      _ <-
+        if (seeds.nonEmpty) Right(())
+        else Left(ProcessingError("local_search_no_seeds", "No seed entities were found for local search"))
       traversal = GraphRAG.traverseFromSeeds(graph, seeds, maxDepth)
+      _ <-
+        if (traversal.nonEmpty) Right(())
+        else
+          Left(ProcessingError("local_search_no_traversal", "No traversable neighborhood found for local search seeds"))
       supportingCommunities = hierarchy.allCommunities
         .filter(c => traversal.nonEmpty && c.nodeIds.exists(traversal.contains))
         .sortBy(c => -c.nodeIds.count(traversal.contains))
@@ -234,45 +258,60 @@ final class GraphRAG(
   private def loadBaseGraph(): Result[Graph] =
     graphStore.loadAll().map(GraphRAG.filterCommunityArtifacts)
 
-  private def persistCommunityNodes(hierarchy: GraphCommunityHierarchy): Result[Unit] = {
-    val persisted = hierarchy.allCommunities.foldLeft[Result[Unit]](Right(())) { (acc, community) =>
-      acc.flatMap { _ =>
-        val summaryText = community.summary.getOrElse("")
-        val communityNode = Node(
-          id = s"community:${community.id}",
-          label = "Community",
-          properties = Map(
-            "communityId" -> ujson.Str(community.id),
-            "level"       -> ujson.Num(community.level),
-            "summary"     -> ujson.Str(summaryText),
-            "edgeCount"   -> ujson.Num(community.edgeCount)
+  private def persistCommunityNodes(hierarchy: GraphCommunityHierarchy): Result[Unit] =
+    for {
+      existingGraph <- graphStore.loadAll()
+      existingCommunityIds = existingGraph.nodes
+        .collect {
+          case (id, node) if id.startsWith(GraphRAG.CommunityIdPrefix) || node.label == GraphRAG.CommunityLabel =>
+            id
+        }
+        .toSeq
+        .sorted
+      _ <- existingCommunityIds.foldLeft[Result[Unit]](Right(())) { (acc, nodeId) =>
+        acc.flatMap(_ => graphStore.deleteNode(nodeId))
+      }
+      _ <- hierarchy.allCommunities.foldLeft[Result[Unit]](Right(())) { (acc, community) =>
+        acc.flatMap { _ =>
+          val summaryText = community.summary.getOrElse("")
+          val communityNode = Node(
+            id = s"community:${community.id}",
+            label = "Community",
+            properties = Map(
+              "communityId" -> ujson.Str(community.id),
+              "level"       -> ujson.Num(community.level),
+              "summary"     -> ujson.Str(summaryText),
+              "edgeCount"   -> ujson.Num(community.edgeCount)
+            )
           )
-        )
 
-        for {
-          _ <- graphStore.upsertNode(communityNode)
-          _ <- community.nodeIds.toSeq.sorted.foldLeft[Result[Unit]](Right(())) { (edgeAcc, nodeId) =>
-            edgeAcc.flatMap(_ =>
-              graphStore.upsertEdge(
-                org.llm4s.knowledgegraph.Edge(
-                  source = communityNode.id,
-                  target = nodeId,
-                  relationship = "CONTAINS"
+          for {
+            _ <- graphStore.upsertNode(communityNode)
+            _ <- community.nodeIds.toSeq.sorted.foldLeft[Result[Unit]](Right(())) { (edgeAcc, nodeId) =>
+              edgeAcc.flatMap(_ =>
+                graphStore.upsertEdge(
+                  org.llm4s.knowledgegraph.Edge(
+                    source = communityNode.id,
+                    target = nodeId,
+                    relationship = "CONTAINS"
+                  )
                 )
               )
-            )
-          }
-        } yield ()
+            }
+          } yield ()
+        }
       }
-    }
-    persisted
-  }
+    } yield ()
 }
 
 private[graphrag] object GraphRAG {
 
-  private val CommunityLabel         = "Community"
-  private val CommunityIdPrefix      = "community:"
+  private[graphrag] val CommunityLabel    = "Community"
+  private[graphrag] val CommunityIdPrefix = "community:"
+
+  def hasSummaries(hierarchy: GraphCommunityHierarchy): Boolean =
+    hierarchy.allCommunities.forall(_.summary.exists(_.trim.nonEmpty))
+
   private val SummaryModelTemp       = CompletionOptions(temperature = 0.0)
   private val NamePropertyKeys       = Seq("name", "title", "entity", "id")
   private val ProvenancePropertyKeys = Seq("source", "docId", "documentId", "path")

@@ -689,9 +689,10 @@ final class RAG private (
     }
 
   /**
-   * Query through GraphRAG (query router chooses global/local mode).
+   * Query through GraphRAG using router-selected mode.
    *
-   * If vector retrieval is available, it is used to provide hybrid mode evidence.
+   * The router decides Global/Local/Hybrid first.
+   * Vector retrieval is only executed when Hybrid is selected.
    */
   def queryWithGraphRAG(question: String, topK: Option[Int] = None): Result[GraphRAGAnswer] =
     graphRAG match {
@@ -702,11 +703,9 @@ final class RAG private (
           )
         )
       case Some(engine) =>
-        val k = topK.getOrElse(config.topK)
         for {
-          queryEmbedding <- embedQuery(question)
-          vectorResults  <- searchWithStrategy(queryEmbedding, question, k)
-          answer         <- engine.answer(question, vectorResults)
+          routed <- engine.route(question)
+          answer <- queryWithGraphRAGMode(question, routed, topK)
         } yield answer
     }
 

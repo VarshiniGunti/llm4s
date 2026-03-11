@@ -45,6 +45,14 @@ class GraphRAGSpec extends AnyFunSuite with Matchers {
     override def getReserveCompletion(): Int = 1024
   }
 
+  private class CountingLLM extends DeterministicLLM {
+    var completeCalls: Int = 0
+    override def complete(conversation: Conversation, options: CompletionOptions): Result[Completion] = {
+      completeCalls += 1
+      super.complete(conversation, options)
+    }
+  }
+
   private def seededStore(): InMemoryGraphStore = {
     val store = new InMemoryGraphStore()
     val nodes = Seq(
@@ -106,6 +114,14 @@ class GraphRAGSpec extends AnyFunSuite with Matchers {
     result.partialAnswers.nonEmpty shouldBe true
   }
 
+  test("globalSearch falls back to top communities when lexical overlap is empty") {
+    val rag = new GraphRAG(seededStore(), new DeterministicLLM())
+
+    val result = rag.globalSearch("qwerty asdfgh zxcvbn", topK = 2).toOption.get
+    result.answer shouldBe "global answer"
+    result.rankedCommunities.nonEmpty shouldBe true
+  }
+
   test("localSearch fans out from seed entities") {
     val rag = new GraphRAG(seededStore(), new DeterministicLLM())
 
@@ -114,6 +130,12 @@ class GraphRAGSpec extends AnyFunSuite with Matchers {
     result.seedNodeIds should contain("alice")
     result.visitedNodeIds should contain("bob")
     result.visitedNodeIds should contain("fintech")
+  }
+
+  test("localSearch fails when no seed entities are found") {
+    val rag = new GraphRAG(seededStore(), new DeterministicLLM())
+    val res = rag.localSearch("qwerty asdfgh zxcvbn")
+    res.isLeft shouldBe true
   }
 
   test("hybridSearch combines vector signal with graph traversal") {
@@ -132,5 +154,27 @@ class GraphRAGSpec extends AnyFunSuite with Matchers {
     result.seedNodeIds should contain("alice")
     result.hits.nonEmpty shouldBe true
     result.hits.head.node.id shouldBe "alice"
+  }
+
+  test("summarizeCommunities uses cache and avoids repeated LLM calls") {
+    val llm = new CountingLLM()
+    val rag = new GraphRAG(seededStore(), llm)
+
+    rag.summarizeCommunities().isRight shouldBe true
+    val firstCount = llm.completeCalls
+    rag.summarizeCommunities().isRight shouldBe true
+    llm.completeCalls shouldBe firstCount
+  }
+
+  test("summarizeCommunities removes stale persisted community artifacts before writing new ones") {
+    val store = seededStore()
+    val rag   = new GraphRAG(store, new DeterministicLLM())
+    rag.summarizeCommunities().isRight shouldBe true
+
+    store.upsertNode(Node("community:stale", "Community", Map("summary" -> ujson.Str("stale")))).isRight shouldBe true
+    store.upsertEdge(Edge("community:stale", "alice", "CONTAINS")).isRight shouldBe true
+
+    rag.summarizeCommunities(forceRefresh = true).isRight shouldBe true
+    store.getNode("community:stale").toOption.flatten shouldBe None
   }
 }
