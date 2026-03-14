@@ -101,11 +101,13 @@ final class GraphRAG(
 ) {
 
   @volatile private var hierarchyCache: Option[GraphCommunityHierarchy] = None
+  @volatile private var graphCache: Option[Graph]                       = None
 
   def detectCommunities(forceRefresh: Boolean = false): Result[GraphCommunityHierarchy] =
     hierarchyCache match {
       case Some(h) if !forceRefresh => Right(h)
       case _ =>
+        if (forceRefresh) graphCache = None
         loadBaseGraph().map { graph =>
           val hierarchy = GraphRAG.buildHierarchy(graph, config)
           hierarchyCache = Some(hierarchy)
@@ -129,6 +131,7 @@ final class GraphRAG(
           _ <- persistCommunityNodes(summarized)
         } yield {
           hierarchyCache = Some(summarized)
+          graphCache = None // Invalidate graph cache since community nodes were persisted
           summarized
         }
     }
@@ -256,7 +259,15 @@ final class GraphRAG(
     }
 
   private def loadBaseGraph(): Result[Graph] =
-    graphStore.loadAll().map(GraphRAG.filterCommunityArtifacts)
+    graphCache match {
+      case Some(g) => Right(g)
+      case None =>
+        graphStore.loadAll().map { raw =>
+          val filtered = GraphRAG.filterCommunityArtifacts(raw)
+          graphCache = Some(filtered)
+          filtered
+        }
+    }
 
   private def persistCommunityNodes(hierarchy: GraphCommunityHierarchy): Result[Unit] =
     for {
@@ -312,7 +323,8 @@ private[graphrag] object GraphRAG {
   def hasSummaries(hierarchy: GraphCommunityHierarchy): Boolean =
     hierarchy.allCommunities.forall(_.summary.exists(_.trim.nonEmpty))
 
-  private val SummaryModelTemp       = CompletionOptions(temperature = 0.0)
+  private val SummaryModelTemp       = CompletionOptions(temperature = 0.0, maxTokens = Some(512))
+  private val AnswerModelTemp        = CompletionOptions(temperature = 0.0, maxTokens = Some(1024))
   private val NamePropertyKeys       = Seq("name", "title", "entity", "id")
   private val ProvenancePropertyKeys = Seq("source", "docId", "documentId", "path")
 
@@ -436,7 +448,7 @@ private[graphrag] object GraphRAG {
               )
             )
           )
-          llmClient.complete(convo, SummaryModelTemp).map(_.content)
+          llmClient.complete(convo, AnswerModelTemp).map(_.content)
         }
       } yield done :+ (community.id -> partial)
     }
@@ -460,7 +472,7 @@ private[graphrag] object GraphRAG {
         )
       )
     )
-    llmClient.complete(convo, SummaryModelTemp).map(_.content)
+    llmClient.complete(convo, AnswerModelTemp).map(_.content)
   }
 
   def answerLocal(
@@ -500,7 +512,7 @@ private[graphrag] object GraphRAG {
       )
     )
 
-    llmClient.complete(convo, SummaryModelTemp).map(_.content)
+    llmClient.complete(convo, AnswerModelTemp).map(_.content)
   }
 
   def answerHybrid(
@@ -533,7 +545,7 @@ private[graphrag] object GraphRAG {
         )
       )
     )
-    llmClient.complete(convo, SummaryModelTemp).map(_.content)
+    llmClient.complete(convo, AnswerModelTemp).map(_.content)
   }
 
   def findSeedNodes(query: String, graph: Graph): Seq[Node] = {
@@ -750,7 +762,7 @@ private[graphrag] object GraphRAG {
     val (large, small)     = grouped.partition { case (_, nodes) => nodes.size >= minCommunitySize }
     val mergedSmallNodeIds = small.values.flatten.toSet
     val merged = if (mergedSmallNodeIds.nonEmpty) {
-      large + ("small" -> (large.getOrElse("small", Set.empty[String]) ++ mergedSmallNodeIds))
+      large + ("__small_merged__" -> (large.getOrElse("__small_merged__", Set.empty[String]) ++ mergedSmallNodeIds))
     } else large
 
     merged.toSeq
