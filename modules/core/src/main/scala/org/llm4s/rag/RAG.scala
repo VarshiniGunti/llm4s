@@ -10,6 +10,7 @@ import org.llm4s.llmconnect.model._
 import org.llm4s.rag.extract.DefaultDocumentExtractor
 import org.llm4s.rag.loader._
 import org.llm4s.rag.permissions._
+import org.llm4s.rag.transform.QueryTransformer
 import org.llm4s.reranker.{ RerankProviderConfig, Reranker, RerankerFactory }
 import org.llm4s.trace.Tracing
 import org.llm4s.types.Result
@@ -651,6 +652,10 @@ final class RAG private (
   /**
    * Search for relevant chunks.
    *
+   * If query transformers are configured, they are applied sequentially
+   * to the query before embedding. The transformed query is used for
+   * both vector search and keyword search.
+   *
    * @param query The search query
    * @param topK Override default topK (optional)
    * @return Ranked search results
@@ -659,8 +664,9 @@ final class RAG private (
     val k = topK.getOrElse(config.topK)
 
     for {
-      queryEmbedding <- embedQuery(query)
-      results        <- searchWithStrategy(queryEmbedding, query, k)
+      transformedQuery <- applyQueryTransforms(query)
+      queryEmbedding   <- embedQuery(transformedQuery)
+      results          <- searchWithStrategy(queryEmbedding, transformedQuery, k)
     } yield results.map(toSearchResult)
   }
 
@@ -955,6 +961,14 @@ final class RAG private (
     hybridSearcher.close()
 
   // ========== Private Implementation ==========
+
+  /**
+   * Apply configured query transforms sequentially.
+   * Returns the original query unchanged if no transforms are configured.
+   */
+  private def applyQueryTransforms(query: String): Result[String] =
+    if (config.queryTransformers.isEmpty) Right(query)
+    else QueryTransformer.applyChain(query, config.queryTransformers)
 
   private val supportedExtensions = Set(".txt", ".md", ".pdf", ".docx", ".json", ".xml", ".html")
 
